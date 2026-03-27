@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Default stub build; to enable Renci.SshNet, set: SSHNET;HAS_RENCI and install package -->
+    <DefineConstants>SSHNET_STUB</DefineConstants>
+  </PropertyGroup>
+</Project>
