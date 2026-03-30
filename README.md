@@ -1,14 +1,14 @@
 # SSH Client
 
-一个独立实现的 Windows 桌面 SSH 代理客户端（.NET 8 + WPF）。
+一个独立实现的 Windows 桌面 SSH 客户端（.NET 8 + WPF）。
 
-本项目聚焦于“通过 SSH 建立上游链路，并在本机提供 HTTP/SOCKS 代理入口 + 规则路由能力”，并不是基于 Shadowrocket 或其衍生实现。
+本项目聚焦于“通过 SSH 建立上游链路，并在本机提供 HTTP/SOCKS 代理入口 + 规则路由能力”。
 
 ## 主要能力
 - WPF 客户端 + MVVM（CommunityToolkit.Mvvm）
 - Profile 管理（保存、另存为、读取）
-- 登录后启动本地代理监听：
-  - HTTP: `127.0.0.1:8888`
+- 登录后启动本地代理监听（单端口 Mixed）：
+  - HTTP: `127.0.0.1:1080`
   - SOCKS5: `127.0.0.1:1080`
 - 规则路由（Profile 级规则，支持 DomainSuffix/IpCidr/All）
 - 规则编辑弹窗与列表双击编辑（默认项不允许在弹窗中编辑，且不可删除）
@@ -90,16 +90,16 @@ dotnet run --project src/SSHClient.App -- --diag
 ```
 
 ## 代理使用说明
-- HTTP 代理地址：`http://127.0.0.1:8888`
+- HTTP 代理地址：`http://127.0.0.1:1080`
 - SOCKS5 代理地址：`socks5://127.0.0.1:1080`
 
-常见误用：
-- 不要把 `http://127.0.0.1:1080` 当作 HTTP 代理使用。
-- `1080` 是 SOCKS5 端口，如果收到日志“首字节 67 (C)”，通常是 HTTP CONNECT 请求发到了 SOCKS 端口。
+说明：
+- 当前版本使用单端口 Mixed 模式，HTTP 与 SOCKS5 共用 `SocksPort`（默认 1080）。
+- `HttpPort` 配置项暂保留用于兼容旧配置，不再用于单独监听。
 
 命令行示例：
 ```bash
-curl -x http://127.0.0.1:8888 https://example.com
+curl -x http://127.0.0.1:1080 https://example.com
 curl --socks5 127.0.0.1:1080 https://example.com
 ```
 

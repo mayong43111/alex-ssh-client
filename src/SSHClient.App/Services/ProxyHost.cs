@@ -8,7 +8,7 @@ using Serilog;
 namespace SSHClient.App.Services;
 
 /// <summary>
-/// Hosts HTTP + SOCKS proxies based on configuration.
+/// Hosts single-port mixed proxy listener based on configuration.
 /// </summary>
 public sealed class ProxyHost : IAsyncDisposable
 {
@@ -18,8 +18,7 @@ public sealed class ProxyHost : IAsyncDisposable
     private readonly ISystemProxyService _systemProxyService;
     private readonly ILogger _logger;
 
-    private HttpProxyServer? _http;
-    private SocksProxyServer? _socks;
+    private MixedProxyServer? _mixed;
 
     private readonly IProxyConnector _proxyConnector;
 
@@ -44,7 +43,7 @@ public sealed class ProxyHost : IAsyncDisposable
             var settings = await _configService.LoadAsync(cancellationToken);
             var proxySettings = settings.Proxy;
 
-            if (_http is not null || _socks is not null)
+            if (_mixed is not null)
             {
                 _logger.Information("代理监听器已在运行");
                 return;
@@ -64,32 +63,30 @@ public sealed class ProxyHost : IAsyncDisposable
             var runtimeRuleEngine = new RuleEngine(BuildRuntimeRules(activeProfile?.Rules ?? Array.Empty<ProxyRule>()));
             var routeProfileName = activeProfile?.Name;
 
-            var http = new HttpProxyServer(
+            var listenPort = proxySettings.SocksPort;
+            if (proxySettings.HttpPort != proxySettings.SocksPort)
+            {
+                _logger.Information(
+                    "已启用单端口 Mixed 模式，监听端口为 {Port}；HttpPort 配置 {HttpPort} 不用于单独监听",
+                    listenPort,
+                    proxySettings.HttpPort);
+            }
+
+            var mixed = new MixedProxyServer(
                 runtimeRuleEngine,
                 _proxyManager,
                 _proxyConnector,
-                proxySettings.HttpPort,
-                _logger,
-                routeProfileName: routeProfileName,
-                routeProfile: activeProfile);
-            var socks = new SocksProxyServer(
-                runtimeRuleEngine,
-                _proxyManager,
-                _proxyConnector,
-                proxySettings.SocksPort,
+                listenPort,
                 _logger,
                 routeProfileName: routeProfileName,
                 routeProfile: activeProfile);
 
-            _http = http;
-            _socks = socks;
-
-            _http.Start();
-            _socks.Start();
+            _mixed = mixed;
+            _mixed.Start();
 
             if (proxySettings.ToggleSystemProxy)
             {
-                await _systemProxyService.EnableAsync("127.0.0.1", proxySettings.HttpPort, proxySettings.SocksPort, cancellationToken);
+                await _systemProxyService.EnableAsync("127.0.0.1", listenPort, listenPort, cancellationToken);
             }
         }
         finally
@@ -103,25 +100,16 @@ public sealed class ProxyHost : IAsyncDisposable
         await _lifecycleGate.WaitAsync(cancellationToken);
         try
         {
-            var http = _http;
-            var socks = _socks;
-            _http = null;
-            _socks = null;
+            var mixed = _mixed;
+            _mixed = null;
 
             // Stop listeners with cancellation support to avoid hangs
-            if (http is not null)
+            if (mixed is not null)
             {
-                try { await http.StopAsync(); }
+                try { await mixed.StopAsync(); }
                 catch (OperationCanceledException) { /* ignorable */ }
-                catch (Exception ex) { _logger.Warning(ex, "HTTP 代理停止异常"); }
-                await http.DisposeAsync();
-            }
-            if (socks is not null)
-            {
-                try { await socks.StopAsync(); }
-                catch (OperationCanceledException) { /* ignorable */ }
-                catch (Exception ex) { _logger.Warning(ex, "SOCKS 代理停止异常"); }
-                await socks.DisposeAsync();
+                catch (Exception ex) { _logger.Warning(ex, "Mixed 代理停止异常"); }
+                await mixed.DisposeAsync();
             }
 
             // Optionally disable system proxy on stop
