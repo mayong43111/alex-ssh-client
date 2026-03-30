@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using SSHClient.Core.Models;
 
 namespace SSHClient.Core.Proxy;
@@ -63,15 +64,80 @@ public sealed class RuleEngine : IRuleEngine
             case RuleMatchType.ProcessName:
                 return processName is not null && rule.Pattern.Equals(processName, StringComparison.OrdinalIgnoreCase);
             case RuleMatchType.DomainSuffix:
-                return host.EndsWith(rule.Pattern, StringComparison.OrdinalIgnoreCase);
+                return IsDomainMatch(rule, host);
             case RuleMatchType.DomainKeyword:
-                return host.Contains(rule.Pattern, StringComparison.OrdinalIgnoreCase);
+                return IsDomainMatch(rule, host);
             case RuleMatchType.IpCidr:
-                if (destIp is null) return false;
-                return CheckCidr(destIp, rule.Pattern ?? rule.Cidr ?? string.Empty);
+                var targetIp = destIp;
+                if (targetIp is null && IPAddress.TryParse(host, out var parsedIp))
+                {
+                    targetIp = parsedIp;
+                }
+
+                if (targetIp is null)
+                {
+                    return false;
+                }
+
+                return CheckCidr(targetIp, rule.Pattern ?? rule.Cidr ?? string.Empty);
             default:
                 return false;
         }
+    }
+
+    private static bool IsDomainMatch(ProxyRuleEx rule, string host)
+    {
+        var patterns = SplitDomainPatterns(rule.Pattern);
+        if (patterns.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var pattern in patterns)
+        {
+            if (pattern == "*")
+            {
+                return true;
+            }
+
+            if (pattern.Contains('*'))
+            {
+                var regexPattern = "^" + Regex.Escape(pattern).Replace("\\*", ".*") + "$";
+                if (Regex.IsMatch(host, regexPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            if (rule.Type == RuleMatchType.DomainKeyword && host.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (host.Equals(pattern, StringComparison.OrdinalIgnoreCase)
+                || host.EndsWith('.' + pattern, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static List<string> SplitDomainPatterns(string? pattern)
+    {
+        if (string.IsNullOrWhiteSpace(pattern))
+        {
+            return new List<string>();
+        }
+
+        return pattern
+            .Split(new[] { ';', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(x => x.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToList();
     }
 
     private static bool CheckCidr(IPAddress ip, string cidr)

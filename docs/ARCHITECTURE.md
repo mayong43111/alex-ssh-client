@@ -1,6 +1,6 @@
 # 🧭 SSH Client Architecture Overview
 
-> 本文档描述整体设计、模块划分、依赖关系、启动流程、配置与日志策略，并给出扩展建议。适用于新成员上手与后续演进。
+> 本文档描述当前代码状态下的整体设计、模块划分、依赖关系、启动流程、配置与日志策略，并给出扩展建议。适用于新成员上手与后续演进。
 
 ---
 
@@ -21,9 +21,15 @@ c:\repos\SSH Client
   - `Services/`：`FileConfigService`, `ProxyManager`, `SshTunnelService`, `SshProxyConnector`, `ISshTunnelService`
   - `Proxy/`：`HttpProxyServer`, `SocksProxyServer`, `RuleEngine`, `RuleAction` 等
 - **SSHClient.App**
-  - `App.xaml` / `App.xaml.cs`：应用入口，构建 DI Host，负责启动 MainWindow/ProxyHost，处理退出
-  - `ViewModels/`：`MainViewModel`, `DashboardViewModel`, `ProfilesViewModel`, `RulesViewModel`, `ConnectionsViewModel`, `RuleTypes`
-  - `MainWindow.xaml`：Tab + DataTemplate 布局（Dashboard/Profiles/Rules/Connections）
+  - `App.xaml` / `App.xaml.cs`：应用入口（薄壳），只负责启动流程编排与错误兜底
+  - `Bootstrap/`：启动分层模块
+    - `AppHostFactory`：Host 构建、DI 注册、Serilog 配置
+    - `GlobalExceptionHooks`：全局异常事件挂钩
+    - `AppRuntime`：主窗口显示、后台服务启停
+  - `ViewModels/`：`MainViewModel`, `ProfilesViewModel`
+  - `MainWindow.xaml`：紧凑登录界面（Login/About）+ 内嵌日志区
+  - `MainWindow.xaml.cs`：日志框自动滚动到末尾（新日志持续向下滚动）
+  - `Logging/`：`RollingUiLogService`, `UiLogSink`（内存滚动日志 + Serilog UI Sink）
   - `Services/ProxyHost`：在配置允许时启动/停止 HTTP+SOCKS 代理、系统代理切换
   - `StartupProbe`：诊断日志写入 `%TEMP%\sshclient-startup.log`
 
@@ -31,16 +37,19 @@ c:\repos\SSH Client
 
 ## 🚀 启动流程（WPF）
 1. `App.OnStartup` 被触发
-2. 解析命令行：支持 `--minimal`（纯烟测窗口）和 `--diag`（Serilog 输出 Console）
-3. 构建 `Host`：`Host.CreateDefaultBuilder(args)` + `appsettings.json`
-4. 注册服务（DI）：
-   - Core：`IConfigService`, `ISshTunnelService`, `Func<ISshTunnelService>`, `IProxyConnector`, `IProxyManager`, `IRuleEngine`, `ISystemProxyService`
-   - App：`ProxyHost`, `MainWindow`, 各 `ViewModel`
-5. `Host.Start()` → 解析 `MainWindow` & `MainViewModel`
-6. 显示主窗体；后台调用 `ProxyHost.StartAsync()`（若配置 `EnableOnStartup = true`）
-7. 退出时：
-   - `Exit` 事件触发 `StopServicesAsync()`（2 秒超时）
-   - `OnExit` 调用 `_host.StopAsync(1s)` 并异步释放（防止 UI 卡死）
+2. 解析命令行：支持 `--minimal`（纯烟测窗口）
+3. 注册全局异常挂钩：`GlobalExceptionHooks.Register(this)`
+4. 通过 `AppHostFactory.Build(args)` 构建 `Host`（`Host.CreateDefaultBuilder + appsettings.json`）
+5. 注册服务（DI）：
+  - Core：`IConfigService`, `ISshTunnelService`, `Func<ISshTunnelService>`, `IProxyConnector`, `IProxyManager`, `IRuleEngine`, `ISystemProxyService`
+  - App：`ProxyHost`, `MainWindow`, `ProfilesViewModel`, `MainViewModel`, `IUiLogService`
+6. `Host.Start()`
+7. `AppRuntime.ShowMainWindow()` 显示主窗体
+8. `AppRuntime.StartBackgroundServicesAsync()` 后台启动 `ProxyHost`
+9. 退出时（`OnExit`）：
+  - `_host.StopAsync(1s)`
+  - `AppRuntime.StopBackgroundServicesAsync(2s)`
+  - `_host.Dispose()`
 
 > 🔁 `--minimal` 模式仍保留：用于快速确认 WPF 渲染/窗口显示是否正常。
 
@@ -84,6 +93,16 @@ c:\repos\SSH Client
 - 聚合配置 → 启动 HTTP/SOCKS 代理 → 可选启用系统代理
 - `StopAsync` 捕获异常，避免退出卡死
 
+### `RollingUiLogService` + `UiLogSink`（App 层）
+- Serilog 通过 `UiLogSink` 进入 UI 内存日志
+- `RollingUiLogService` 负责滚动窗口（最大 1000 条）
+- 超过 1000 条时删除最早日志，`MainViewModel.LiveLog` 订阅快照更新
+
+### `ProfilesViewModel`（App 层）
+- 负责 Profile 的加载、保存、刷新与连接
+- 无 Profile 时自动创建默认 `Default`
+- Login 页关键绑定字段：`Host`, `Port`, `LocalListenAddress`, `LocalSocksPort`, `Username`, `AuthMethod`, `Password`
+
 ### `SystemProxyService`
 - 封装系统代理开关（Windows）
 - 受 `appsettings.json` 中 `ToggleSystemProxy` 控制
@@ -92,14 +111,12 @@ c:\repos\SSH Client
 
 ## 🖥️ WPF MVVM
 - **View**：`MainWindow.xaml`
-  - `TabControl` + `DataTemplate` 绑定各 ViewModel
-  - Profiles/Rules DataGrid 支持编辑 & 保存（调用 `SaveAsync`）
+  - `TabControl` 仅保留 `Login` / `About`
+  - `Login` 内包含：Server/Auth 表单 + 日志显示区
+  - 底部操作按钮：`Log in`（主按钮）+ `Save` / `Load` / `Exit`（次按钮）
 - **ViewModel**：
-  - `MainViewModel`：构建 Tabs，持有 `SelectedTab`
-  - `DashboardViewModel`：状态展示（端口、系统代理开关等）
+  - `MainViewModel`：页面组合根 + `LiveLog` 同步
   - `ProfilesViewModel`：加载/新增/删除/连接 Profile，保存回 `appsettings.json`
-  - `RulesViewModel`：增删改 Rule
-  - `ConnectionsViewModel`：活跃连接列表 & DisconnectCommand
 - 使用 **CommunityToolkit.Mvvm**：`ObservableObject`, `[ObservableProperty]`, `[RelayCommand]`
 
 ---
@@ -127,18 +144,23 @@ c:\repos\SSH Client
 ```
 
 ### Serilog
-- 来源：`Host.UseSerilog`
-- 输出：Console（`--diag` 时可观察），如配置 `LogPath` 则写 rolling file
+- 来源：`AppHostFactory -> Host.UseSerilog`
+- 输出：Console + 可选 rolling file（配置 `LogPath` 时启用）
+- 同步输出：`UiLogSink -> RollingUiLogService`（UI 实时日志）
 - `StartupProbe`：专用于启动阶段诊断 → `%TEMP%\sshclient-startup.log`
 
 ---
 
 ## ⏹️ 退出与资源释放
-- `App.Exit` 事件 → `StopServicesAsync()`（2 秒限时停 `ProxyHost`）
-- `App.OnExit`：短超时调用 `_host.StopAsync(1s)`，然后异步 `_host.Dispose()`
+- `App.OnExit`：
+   - `_host.StopAsync(1s)`
+   - `AppRuntime.StopBackgroundServicesAsync(2s)`
+   - `_host.Dispose()`
 - 代理监听器 (`HttpProxyServer`, `SocksProxyServer`) 的停止方法捕获取消/Socket 异常，防止 hang
 
 > ✅ 已验证：`dotnet run --project src/SSHClient.App --no-build -- --diag` 后关闭窗口，进程正常退出（避免之前的卡死）。
+
+> 注：`--diag` 不是专用业务参数；当前主要用于开发阶段配合控制台输出进行诊断。
 
 ---
 
@@ -167,9 +189,14 @@ c:\repos\SSH Client
 ---
 
 ## 🧷 关键词索引（文件 → 功能）
-- `src/SSHClient.App/App.xaml.cs` → 启动、DI、退出处理、`--minimal`、`--diag`
-- `src/SSHClient.App/MainWindow.xaml` → Tab UI 模板
-- `src/SSHClient.App/ViewModels/*.cs` → MVVM 逻辑
+- `src/SSHClient.App/App.xaml.cs` → 启动编排、`--minimal`、异常兜底
+- `src/SSHClient.App/Bootstrap/AppHostFactory.cs` → Host 构建、DI、Serilog
+- `src/SSHClient.App/Bootstrap/GlobalExceptionHooks.cs` → 全局异常挂钩
+- `src/SSHClient.App/Bootstrap/AppRuntime.cs` → 主窗口显示、后台服务启停
+- `src/SSHClient.App/MainWindow.xaml` → Login/About UI 与内嵌日志面板
+- `src/SSHClient.App/MainWindow.xaml.cs` → 日志框自动滚动行为
+- `src/SSHClient.App/Logging/*.cs` → UI 滚动日志管线
+- `src/SSHClient.App/ViewModels/*.cs` → MVVM 逻辑（当前主用 Main/Profiles）
 - `src/SSHClient.App/Services/ProxyHost.cs` → 聚合代理启动/停止
 - `src/SSHClient.Core/Services/ProxyManager.cs` → Profile & Tunnel 管理
 - `src/SSHClient.Core/Services/SshTunnelService.cs` → SSH 隧道（SSHNET/stub）

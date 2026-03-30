@@ -1,6 +1,8 @@
 using SSHClient.Core.Models;
 using Serilog;
 using System.Collections.Concurrent;
+using System.IO;
+using System.Linq;
 
 namespace SSHClient.Core.Services;
 
@@ -38,63 +40,163 @@ public sealed class SshTunnelService : ISshTunnelService, ILocalForwardManager
         {
             if (_client?.IsConnected == true)
             {
-                _logger.Information("SSH tunnel already connected for {Profile}", profile.Name);
+                _logger.Information("SSH 隧道已连接，配置 {Profile}", profile.Name);
                 return true;
             }
         }
 
-        var connectionInfo = BuildConnectionInfo(profile);
-        var client = new Renci.SshNet.SshClient(connectionInfo)
+        var candidates = ResolveConnectionCandidates(profile).ToList();
+        if (candidates.Count == 0)
         {
-            KeepAliveInterval = TimeSpan.FromSeconds(30),
-        };
+            _logger.Warning("配置 {Profile} 缺少可用的认证材料", profile.Name);
+            return false;
+        }
 
-        try
+        foreach (var candidate in candidates)
         {
-            client.Connect();
-            if (!client.IsConnected)
+            Renci.SshNet.SshClient? client = null;
+            try
             {
-                _logger.Error("Failed to connect SSH client for {Profile}", profile.Name);
+                var connectionInfo = BuildConnectionInfo(candidate);
+
+                if (candidate.AuthMethod == SshAuthMethod.PrivateKey)
+                {
+                    _logger.Information(
+                        "正在为配置 {Profile} 打开 SSH 隧道到 {Host}:{Port}，用户名 {Username}，认证方式 {AuthMethod}，密钥 {KeyPath}",
+                        candidate.Name,
+                        candidate.Host,
+                        candidate.Port,
+                        candidate.Username,
+                        ToZhAuthMethod(candidate.AuthMethod),
+                        candidate.PrivateKeyPath);
+                }
+                else
+                {
+                    _logger.Information(
+                        "正在为配置 {Profile} 打开 SSH 隧道到 {Host}:{Port}，用户名 {Username}，认证方式 {AuthMethod}",
+                        candidate.Name,
+                        candidate.Host,
+                        candidate.Port,
+                        candidate.Username,
+                        ToZhAuthMethod(candidate.AuthMethod));
+                }
+
+                client = new Renci.SshNet.SshClient(connectionInfo)
+                {
+                    KeepAliveInterval = TimeSpan.FromSeconds(30),
+                };
+
+                await Task.Run(() => client.Connect(), cancellationToken);
+                if (!client.IsConnected)
+                {
+                    _logger.Error("配置 {Profile} 的 SSH 客户端连接失败", candidate.Name);
+                    client.Dispose();
+                    continue;
+                }
+
+                lock (_sync)
+                {
+                    _client = client;
+                    _dynamicPort = null;
+                }
+
+                _logger.Information("配置 {Profile} 的 SSH 隧道已建立（本地代理端口由应用监听）", candidate.Name);
+                return true;
+            }
+            catch (Renci.SshNet.Common.SshAuthenticationException ex)
+            {
+                if (candidate.AuthMethod == SshAuthMethod.PrivateKey)
+                {
+                    _logger.Warning(ex, "配置 {Profile} 使用密钥 {KeyPath} 认证失败", candidate.Name, candidate.PrivateKeyPath);
+                }
+                else
+                {
+                    _logger.Error(ex, "配置 {Profile} SSH 认证失败", candidate.Name);
+                }
+
+                client?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "配置 {Profile} SSH 连接失败", candidate.Name);
+                client?.Dispose();
                 return false;
             }
-
-            var listenAddress = string.IsNullOrWhiteSpace(profile.LocalListenAddress)
-                ? "127.0.0.1"
-                : profile.LocalListenAddress;
-
-            var dynamicPort = new Renci.SshNet.ForwardedPortDynamic(listenAddress, (uint)profile.LocalSocksPort);
-            client.AddForwardedPort(dynamicPort);
-            dynamicPort.Exception += (_, e) => _logger.Error(e.Exception, "Forwarded port error");
-            dynamicPort.Start();
-
-            lock (_sync)
-            {
-                _client = client;
-                _dynamicPort = dynamicPort;
-            }
-
-            _logger.Information("SSH SOCKS tunnel started on {Address}:{Port} for profile {Profile}", listenAddress, profile.LocalSocksPort, profile.Name);
-            return true;
         }
-        catch (Renci.SshNet.Common.SshAuthenticationException ex)
-        {
-            _logger.Error(ex, "SSH authentication failed for profile {Profile}", profile.Name);
-            client.Dispose();
-            return false;
-        }
-        catch (Exception ex)
-        {
-            _logger.Error(ex, "SSH connection failed for profile {Profile}", profile.Name);
-            client.Dispose();
-            return false;
-        }
+
+        _logger.Error("配置 {Profile} SSH 认证失败，已尝试 {CandidateCount} 个认证候选", profile.Name, candidates.Count);
+        return false;
 #else
         // Stub path for offline/initial scaffolding.
-        _logger.Warning("SSHNET not enabled; starting stub tunnel for profile {Profile}", profile.Name);
+        _logger.Warning("未启用 SSHNET，正在为配置 {Profile} 启动桩隧道", profile.Name);
         _isConnected = true;
         await Task.CompletedTask;
         return true;
 #endif
+    }
+
+    private IEnumerable<ProxyProfile> ResolveConnectionCandidates(ProxyProfile profile)
+    {
+        if (profile.AuthMethod != SshAuthMethod.PrivateKey)
+        {
+            return new[] { profile };
+        }
+
+        if (!string.IsNullOrWhiteSpace(profile.PrivateKeyPath))
+        {
+            return new[] { profile };
+        }
+
+        var keyPaths = GetDefaultPrivateKeyPaths().ToList();
+        if (keyPaths.Count > 0)
+        {
+            _logger.Information("配置 {Profile} 使用自动发现的 {Count} 个默认 SSH 密钥候选", profile.Name, keyPaths.Count);
+            return keyPaths.Select(path => profile with { PrivateKeyPath = path });
+        }
+
+        _logger.Warning("配置 {Profile} 选择了公钥认证，但在用户 .ssh 目录未找到私钥", profile.Name);
+        return Array.Empty<ProxyProfile>();
+    }
+
+    private static IEnumerable<string> GetDefaultPrivateKeyPaths()
+    {
+        var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrWhiteSpace(userHome))
+        {
+            userHome = Environment.GetEnvironmentVariable("USERPROFILE") ?? string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(userHome))
+        {
+            return Array.Empty<string>();
+        }
+
+        var sshDir = Path.Combine(userHome, ".ssh");
+        var candidates = new[]
+        {
+            "id_ed25519",
+            "id_ecdsa",
+            "id_rsa",
+            "id_dsa",
+            "id_ed25519_sk",
+            "id_ecdsa_sk",
+        };
+
+        return candidates
+            .Select(name => Path.Combine(sshDir, name))
+            .Where(File.Exists)
+            .ToList();
+    }
+
+    private static string ToZhAuthMethod(SshAuthMethod method)
+    {
+        return method switch
+        {
+            SshAuthMethod.Password => "密码",
+            SshAuthMethod.PrivateKey => "公钥",
+            SshAuthMethod.KeyboardInteractive => "键盘交互",
+            _ => method.ToString(),
+        };
     }
 
     public Task StopAsync(CancellationToken cancellationToken = default)
@@ -116,14 +218,14 @@ public sealed class SshTunnelService : ISshTunnelService, ILocalForwardManager
                     }
                     catch (Exception ex)
                     {
-                        _logger.Warning(ex, "Error stopping local forward {Key}", kvp.Key);
+                        _logger.Warning(ex, "停止本地转发 {Key} 时出错", kvp.Key);
                     }
                 }
                 _localForwards.Clear();
             }
             catch (Exception ex)
             {
-                _logger.Warning(ex, "Error while stopping forwarded port");
+                _logger.Warning(ex, "停止转发端口时出错");
             }
             finally
             {
@@ -148,12 +250,12 @@ public sealed class SshTunnelService : ISshTunnelService, ILocalForwardManager
         {
             case SshAuthMethod.Password:
                 if (string.IsNullOrEmpty(profile.Password))
-                    throw new InvalidOperationException("Password auth selected but password is empty.");
+                    throw new InvalidOperationException("已选择密码认证，但密码为空。");
                 methods.Add(new Renci.SshNet.PasswordAuthenticationMethod(profile.Username, profile.Password));
                 break;
             case SshAuthMethod.PrivateKey:
                 if (string.IsNullOrEmpty(profile.PrivateKeyPath))
-                    throw new InvalidOperationException("PrivateKey auth selected but key path is empty.");
+                    throw new InvalidOperationException("已选择私钥认证，但密钥路径为空。");
                 var keyFile = string.IsNullOrEmpty(profile.PrivateKeyPassphrase)
                     ? new Renci.SshNet.PrivateKeyFile(profile.PrivateKeyPath)
                     : new Renci.SshNet.PrivateKeyFile(profile.PrivateKeyPath, profile.PrivateKeyPassphrase);
@@ -189,7 +291,7 @@ public sealed class SshTunnelService : ISshTunnelService, ILocalForwardManager
 #if SSHNET
         cancellationToken.ThrowIfCancellationRequested();
         if (_client is null || !_client.IsConnected)
-            throw new InvalidOperationException("SSH client not connected");
+            throw new InvalidOperationException("SSH 客户端未连接");
 
         var key = $"{host}:{port}";
         if (_localForwards.TryGetValue(key, out var existing))
@@ -201,7 +303,7 @@ public sealed class SshTunnelService : ISshTunnelService, ILocalForwardManager
         uint boundPort = 0;
         var fwd = new Renci.SshNet.ForwardedPortLocal("127.0.0.1", boundPort, host, (uint)port);
         _client.AddForwardedPort(fwd);
-        fwd.Exception += (_, e) => _logger.Error(e.Exception, "Forwarded port error (local forward)");
+        fwd.Exception += (_, e) => _logger.Error(e.Exception, "转发端口异常（本地转发）");
         fwd.Start();
         boundPort = fwd.BoundPort;
 

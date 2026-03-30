@@ -25,7 +25,7 @@ public sealed class SshProxyConnector : IProxyConnector
         var ok = await _tunnelService.StartAsync(profile, cancellationToken);
         if (!ok)
         {
-            throw new InvalidOperationException($"Failed to start SSH tunnel for profile {profile.Name}");
+            throw new InvalidOperationException($"配置 {profile.Name} 启动 SSH 隧道失败");
         }
         // Create a local forwarded port to the target, then connect to it locally
         var localPort = await EnsureLocalForwardAsync(profile, host, port);
@@ -49,7 +49,7 @@ public sealed class SshProxyConnector : IProxyConnector
             return await mgr.EnsureLocalForwardAsync(host, port);
         }
         // fallback: direct connect fallback
-        _logger.Warning("Tunnel service does not implement ILocalForwardManager; falling back to direct connect");
+        _logger.Warning("隧道服务未实现 ILocalForwardManager，回退为直连");
         return port;
 
     }

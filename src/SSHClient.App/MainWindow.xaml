@@ -4,8 +4,9 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:coreModels="clr-namespace:SSHClient.Core.Models;assembly=SSHClient.Core"
+        xmlns:converters="clr-namespace:SSHClient.App.Converters"
         mc:Ignorable="d"
-        Title="SSH Client"
+        Title="SSH 客户端"
         Width="600"
         Height="600"
         MinWidth="600"
@@ -14,19 +15,8 @@
         WindowStartupLocation="CenterScreen"
         Background="#E6E9EF">
     <Window.Resources>
-        <Style x:Key="IconButton" TargetType="Button">
-            <Setter Property="Width" Value="22"/>
-            <Setter Property="Height" Value="22"/>
-            <Setter Property="Margin" Value="6,0,0,0"/>
-            <Setter Property="Padding" Value="0"/>
-            <Setter Property="Background" Value="#F1F5F9"/>
-            <Setter Property="Foreground" Value="#1F2937"/>
-            <Setter Property="BorderBrush" Value="#CBD5E1"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="HorizontalAlignment" Value="Left"/>
-        </Style>
+        <converters:RuleActionDisplayConverter x:Key="RuleActionDisplayConverter"/>
+        <converters:RuleTypeDisplayConverter x:Key="RuleTypeDisplayConverter"/>
 
         <Style x:Key="PrimaryButton" TargetType="Button">
             <Setter Property="Height" Value="24"/>
@@ -51,6 +41,23 @@
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="Bd" Property="Background" Value="#1E40AF"/>
                             </Trigger>
+                                <Trigger Property="Tag" Value="登出">
+                                    <Setter TargetName="Bd" Property="Background" Value="#DC2626"/>
+                                </Trigger>
+                                <MultiTrigger>
+                                    <MultiTrigger.Conditions>
+                                        <Condition Property="Tag" Value="登出"/>
+                                        <Condition Property="IsMouseOver" Value="True"/>
+                                    </MultiTrigger.Conditions>
+                                    <Setter TargetName="Bd" Property="Background" Value="#B91C1C"/>
+                                </MultiTrigger>
+                                <MultiTrigger>
+                                    <MultiTrigger.Conditions>
+                                        <Condition Property="Tag" Value="登出"/>
+                                        <Condition Property="IsPressed" Value="True"/>
+                                    </MultiTrigger.Conditions>
+                                    <Setter TargetName="Bd" Property="Background" Value="#991B1B"/>
+                                </MultiTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -84,12 +91,6 @@
             <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
 
-        <Style TargetType="CheckBox">
-            <Setter Property="Height" Value="24"/>
-            <Setter Property="Margin" Value="0,2,8,2"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-        </Style>
-
         <Style TargetType="TextBlock">
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
@@ -105,8 +106,8 @@
         <!-- 上：当前 profile + 小图标切换（透明背景） -->
         <Border Grid.Row="0" Background="Transparent" BorderThickness="0" Padding="0,0,0,1">
             <StackPanel Orientation="Horizontal">
-                <TextBlock Text="Current profile:" FontWeight="SemiBold" Margin="0,0,8,0"/>
-                <TextBlock Text="{Binding ProfilesVM.SelectedProfile.Name, TargetNullValue=Default}" FontWeight="Bold" Foreground="#1D4ED8"/>
+                <TextBlock Text="当前配置：" FontWeight="SemiBold" Margin="0,0,8,0"/>
+                <TextBlock Text="{Binding ProfilesVM.SelectedProfile.Name, TargetNullValue=默认}" FontWeight="Bold" Foreground="#1D4ED8"/>
             </StackPanel>
         </Border>
 
@@ -120,7 +121,7 @@
 
                 <!-- 中上：Tab -->
                 <TabControl Grid.Row="0" Margin="0,0,0,6" VerticalAlignment="Stretch">
-                    <TabItem Header="Login">
+                    <TabItem Header="登录">
                         <Grid Margin="4" VerticalAlignment="Stretch">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
@@ -132,7 +133,7 @@
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
 
-                                <GroupBox Header="Server" Grid.Column="0" Margin="0,0,6,0" VerticalAlignment="Top">
+                                <GroupBox Header="服务器" Grid.Column="0" Margin="0,0,6,0" VerticalAlignment="Top">
                                     <Grid Margin="4">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
@@ -144,39 +145,86 @@
                                             <ColumnDefinition Width="95"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="Host" Grid.Row="0" Grid.Column="0"/>
+                                        <TextBlock Text="主机" Grid.Row="0" Grid.Column="0"/>
                                         <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding ProfilesVM.SelectedProfile.Host, Mode=TwoWay}"/>
-                                        <TextBlock Text="Port" Grid.Row="1" Grid.Column="0"/>
+                                        <TextBlock Text="端口" Grid.Row="1" Grid.Column="0"/>
                                         <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ProfilesVM.SelectedProfile.Port, Mode=TwoWay}"/>
-                                        <TextBlock Text="Listen address" Grid.Row="2" Grid.Column="0"/>
+                                        <TextBlock Text="监听地址" Grid.Row="2" Grid.Column="0"/>
                                         <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding ProfilesVM.SelectedProfile.LocalListenAddress, Mode=TwoWay}"/>
-                                        <TextBlock Text="Listen port" Grid.Row="3" Grid.Column="0"/>
+                                        <TextBlock Text="监听端口" Grid.Row="3" Grid.Column="0"/>
                                         <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding ProfilesVM.SelectedProfile.LocalSocksPort, Mode=TwoWay}"/>
                                     </Grid>
                                 </GroupBox>
 
-                                <GroupBox Header="Authentication" Grid.Column="1" Margin="6,0,0,0" VerticalAlignment="Top">
-                                    <Grid Margin="4">
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                        </Grid.RowDefinitions>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="85"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="Username" Grid.Row="0" Grid.Column="0"/>
-                                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding ProfilesVM.SelectedProfile.Username, Mode=TwoWay}"/>
-                                        <TextBlock Text="Method" Grid.Row="1" Grid.Column="0"/>
-                                        <ComboBox Grid.Row="1" Grid.Column="1"
-                                                  SelectedValuePath="Tag"
-                                                  SelectedValue="{Binding ProfilesVM.SelectedProfile.AuthMethod, Mode=TwoWay}">
-                                            <ComboBoxItem Content="Password" Tag="{x:Static coreModels:SshAuthMethod.Password}"/>
-                                        </ComboBox>
-                                        <TextBlock Text="Password" Grid.Row="2" Grid.Column="0"/>
-                                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding ProfilesVM.SelectedProfile.Password, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
-                                    </Grid>
+                                <GroupBox Header="认证" Grid.Column="1" Margin="6,0,0,0" VerticalAlignment="Top">
+                                    <StackPanel Margin="4">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="85"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="用户名" Grid.Column="0"/>
+                                            <TextBox Grid.Column="1" Text="{Binding ProfilesVM.SelectedProfile.Username, Mode=TwoWay}"/>
+                                        </Grid>
+
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="85"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="方式" Grid.Column="0"/>
+                                            <ComboBox Grid.Column="1"
+                                                      SelectedValuePath="Tag"
+                                                      SelectedValue="{Binding ProfilesVM.SelectedProfile.AuthMethod, Mode=TwoWay}">
+                                                <ComboBoxItem Content="密码" Tag="{x:Static coreModels:SshAuthMethod.Password}"/>
+                                                <ComboBoxItem Content="公钥" Tag="{x:Static coreModels:SshAuthMethod.PrivateKey}"/>
+                                            </ComboBox>
+                                        </Grid>
+
+                                        <Grid>
+                                            <Grid.Style>
+                                                <Style TargetType="Grid">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding ProfilesVM.SelectedProfile.AuthMethod}" Value="{x:Static coreModels:SshAuthMethod.Password}">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Grid.Style>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="85"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="密码" Grid.Column="0"/>
+                                            <TextBox Grid.Column="1" Text="{Binding ProfilesVM.SelectedProfile.Password, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                        </Grid>
+
+                                        <Grid>
+                                            <Grid.Style>
+                                                <Style TargetType="Grid">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding ProfilesVM.SelectedProfile.AuthMethod}" Value="{x:Static coreModels:SshAuthMethod.PrivateKey}">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Grid.Style>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="85"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="密钥文件" Grid.Row="0" Grid.Column="0"/>
+                                            <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding ProfilesVM.SelectedProfile.PrivateKeyPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                            <TextBlock Text="密钥口令" Grid.Row="1" Grid.Column="0"/>
+                                            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ProfilesVM.SelectedProfile.PrivateKeyPassphrase, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                        </Grid>
+                                    </StackPanel>
                                 </GroupBox>
                             </Grid>
 
@@ -186,7 +234,7 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="*"/>
                                     </Grid.RowDefinitions>
-                                    <TextBlock Grid.Row="0" Text="Log" FontWeight="SemiBold" Margin="8,6"/>
+                                    <TextBlock Grid.Row="0" Text="日志" FontWeight="SemiBold" Margin="8,6"/>
                                     <TextBox Grid.Row="1"
                                              Name="LiveLogTextBox"
                                              Margin="6,0,6,6"
@@ -209,7 +257,84 @@
                         </Grid>
                     </TabItem>
 
-                    <TabItem Header="About">
+                    <TabItem Header="规则">
+                        <Grid Margin="8">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="新增规则"
+                                        Width="90"
+                                        Click="AddRuleButton_Click"
+                                        Style="{StaticResource SecondaryButton}"/>
+                                <Button Content="编辑规则"
+                                    Width="90"
+                                    Click="EditRuleButton_Click"
+                                    Style="{StaticResource SecondaryButton}"/>
+                                <Button Content="删除规则"
+                                        Width="90"
+                                        Command="{Binding ProfilesVM.DeleteRuleCommand}"
+                                        Style="{StaticResource SecondaryButton}"/>
+                            </StackPanel>
+
+                            <TextBlock Grid.Row="1"
+                                       Margin="2,0,0,8"
+                                       Foreground="#64748B"
+                                       Text="说明：新增/编辑规则通过弹窗录入；类型支持 全部/域名/IP 段。域名可输入多条（; 或换行分隔），IP 段使用 CIDR；选择全部时无需输入。列表中仅可修改动作。"/>
+
+                            <DataGrid Grid.Row="2"
+                                      ItemsSource="{Binding ProfilesVM.Rules}"
+                                      SelectedItem="{Binding ProfilesVM.SelectedRule, Mode=TwoWay}"
+                                      AutoGenerateColumns="False"
+                                      CanUserAddRows="False"
+                                      HeadersVisibility="Column"
+                                      GridLinesVisibility="Horizontal"
+                                      RowHeaderWidth="0"
+                                      RowHeight="30"
+                                      BorderBrush="#D2D8E2"
+                                      BorderThickness="1">
+                                <DataGrid.CellStyle>
+                                    <Style TargetType="DataGridCell">
+                                        <Setter Property="VerticalContentAlignment" Value="Center"/>
+                                        <Setter Property="Padding" Value="6,0,6,0"/>
+                                    </Style>
+                                </DataGrid.CellStyle>
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="名称" Width="120" Binding="{Binding Name}" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="优先级" Width="80" Binding="{Binding Priority}" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="匹配" Width="*" Binding="{Binding Pattern}" IsReadOnly="True"/>
+                                    <DataGridTemplateColumn Header="类型" Width="120" IsReadOnly="True">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Type, Converter={StaticResource RuleTypeDisplayConverter}}"/>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="动作" Width="90" IsReadOnly="False">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox Height="24"
+                                                          VerticalAlignment="Center"
+                                                          ItemsSource="{Binding DataContext.ProfilesVM.RuleActions, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                          SelectedItem="{Binding Action, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                                                    <ComboBox.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Text="{Binding Converter={StaticResource RuleActionDisplayConverter}}"/>
+                                                        </DataTemplate>
+                                                    </ComboBox.ItemTemplate>
+                                                </ComboBox>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="关于">
                         <Grid Margin="8">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
@@ -219,9 +344,9 @@
 
                             <Border Grid.Row="0" Background="#F8FAFC" BorderBrush="#D2D8E2" BorderThickness="1" CornerRadius="3" Padding="10">
                                 <StackPanel>
-                                    <TextBlock Text="SSH Client" FontWeight="Bold" FontSize="13"/>
-                                    <TextBlock Text="A compact SSH proxy client for Windows" Margin="0,3,0,0" Foreground="#475569"/>
-                                    <TextBlock Text="Runtime: .NET 8 / UI: WPF" Margin="0,4,0,0" Foreground="#64748B"/>
+                                    <TextBlock Text="SSH 客户端" FontWeight="Bold" FontSize="13"/>
+                                    <TextBlock Text="面向 Windows 的轻量 SSH 代理客户端" Margin="0,3,0,0" Foreground="#475569"/>
+                                    <TextBlock Text="运行时：.NET 8 / 界面：WPF" Margin="0,4,0,0" Foreground="#64748B"/>
                                 </StackPanel>
                             </Border>
 
@@ -237,21 +362,21 @@
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
 
-                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Platform" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="平台" FontWeight="SemiBold"/>
                                     <TextBlock Grid.Row="0" Grid.Column="1" Text="Windows"/>
-                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Transport" FontWeight="SemiBold"/>
-                                    <TextBlock Grid.Row="1" Grid.Column="1" Text="SSH Tunnel + Local Proxy"/>
-                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Config" FontWeight="SemiBold"/>
-                                    <TextBlock Grid.Row="2" Grid.Column="1" Text="Profiles and rules saved locally"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="传输" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Text="SSH 隧道 + 本地代理"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="配置" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="1" Text="配置与规则本地保存"/>
                                 </Grid>
                             </Border>
 
                             <Border Grid.Row="2" Margin="0,8,0,0" Background="#FFFFFF" BorderBrush="#D2D8E2" BorderThickness="1" CornerRadius="3" Padding="10">
                                 <StackPanel>
-                                    <TextBlock Text="Quick notes" FontWeight="SemiBold"/>
-                                    <TextBlock Text="- Use Save to persist profile changes" Margin="0,4,0,0"/>
-                                    <TextBlock Text="- Use Load to reload profiles from config" Margin="0,2,0,0"/>
-                                    <TextBlock Text="- Log panel supports text selection and copy" Margin="0,2,0,0"/>
+                                    <TextBlock Text="快速说明" FontWeight="SemiBold"/>
+                                    <TextBlock Text="- 使用 保存 持久化当前配置" Margin="0,4,0,0"/>
+                                    <TextBlock Text="- 使用 读取 从配置文件重新加载" Margin="0,2,0,0"/>
+                                    <TextBlock Text="- 日志面板支持文本选择与复制" Margin="0,2,0,0"/>
                                 </StackPanel>
                             </Border>
                         </Grid>
@@ -260,19 +385,20 @@
 
                 <!-- 中底：Action 按钮 -->
                 <UniformGrid Grid.Row="1" Margin="0,8,0,0" Columns="4" HorizontalAlignment="Stretch">
-                    <Button Content="Log in"
+                    <Button Content="{Binding ProfilesVM.ConnectButtonText}"
                         Width="90"
+                        Tag="{Binding ProfilesVM.ConnectButtonText}"
                         Command="{Binding ProfilesVM.ConnectCommand}"
                         Style="{StaticResource PrimaryButton}"/>
-                    <Button Content="Save"
+                    <Button Content="保存"
                         Width="90"
                         Command="{Binding ProfilesVM.SaveProfileCommand}"
                         Style="{StaticResource SecondaryButton}"/>
-                    <Button Content="Load"
+                    <Button Content="读取"
                         Width="90"
                         Command="{Binding ProfilesVM.RefreshCommand}"
                         Style="{StaticResource SecondaryButton}"/>
-                    <Button Content="Exit"
+                    <Button Content="退出"
                         Width="90"
                         Style="{StaticResource SecondaryButton}"
                         Click="ExitButton_Click"/>
@@ -282,7 +408,7 @@
 
         <!-- 下：版权信息（透明背景、低高度、小字号） -->
         <Border Grid.Row="2" Background="Transparent" BorderThickness="0" Padding="0,2,0,0">
-            <TextBlock Text="Copyright (C) 2026 SSH Client. All rights reserved."
+            <TextBlock Text="版权所有 (C) 2026 SSH 客户端。保留所有权利。"
                        FontSize="9"
                        HorizontalAlignment="Center"
                        Foreground="#64748B"/>

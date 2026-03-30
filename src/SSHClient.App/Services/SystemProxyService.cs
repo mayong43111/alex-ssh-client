@@ -26,14 +26,14 @@ public sealed class SystemProxyService : ISystemProxyService
         var proxyString = $"{host}:{httpPort}"; // WinINET doesn’t support SOCKS notation directly; use HTTP proxy here.
         SetWinInetProxy(proxyString);
         await SetWinHttpProxy(proxyString, cancellationToken);
-        _logger.Information("System proxy enabled: {Proxy}", proxyString);
+        _logger.Information("系统代理已启用：{Proxy}", proxyString);
     }
 
     public async Task DisableAsync(CancellationToken cancellationToken = default)
     {
         SetWinInetProxy(null);
         await SetWinHttpProxy("", cancellationToken);
-        _logger.Information("System proxy disabled");
+        _logger.Information("系统代理已关闭");
     }
 
     private static void SetWinInetProxy(string? proxy)

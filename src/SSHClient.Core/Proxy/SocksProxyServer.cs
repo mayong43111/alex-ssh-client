@@ -20,15 +20,17 @@ public sealed class SocksProxyServer : IAsyncDisposable
     private readonly IProxyManager _proxyManager;
     private readonly IProxyConnector _proxyConnector;
     private readonly int _port;
+    private readonly string? _routeProfileName;
     private readonly TcpListener _listener;
     private CancellationTokenSource? _cts;
 
-    public SocksProxyServer(IRuleEngine rules, IProxyManager proxyManager, IProxyConnector proxyConnector, int port, ILogger? logger = null)
+    public SocksProxyServer(IRuleEngine rules, IProxyManager proxyManager, IProxyConnector proxyConnector, int port, ILogger? logger = null, string? routeProfileName = null)
     {
         _rules = rules;
         _proxyManager = proxyManager;
         _proxyConnector = proxyConnector;
         _port = port;
+        _routeProfileName = routeProfileName;
         _listener = new TcpListener(IPAddress.Loopback, port);
         _logger = logger ?? Serilog.Log.Logger;
     }
@@ -37,8 +39,8 @@ public sealed class SocksProxyServer : IAsyncDisposable
     {
         _cts = new CancellationTokenSource();
         _listener.Start();
-        _ = AcceptLoopAsync(_cts.Token);
-        _logger.Information("SOCKS proxy listening on 127.0.0.1:{Port}", _port);
+        _ = ObserveBackgroundTaskAsync(AcceptLoopAsync(_cts.Token), "SOCKS 接收循环后台任务异常");
+        _logger.Information("SOCKS 代理已监听 127.0.0.1:{Port}", _port);
     }
 
     public async Task StopAsync()
@@ -46,7 +48,7 @@ public sealed class SocksProxyServer : IAsyncDisposable
         try { _cts?.Cancel(); }
         catch { /* ignore */ }
         try { _listener.Stop(); }
-        catch (Exception ex) { _logger.Warning(ex, "SOCKS proxy listener stop failed"); }
+        catch (Exception ex) { _logger.Warning(ex, "SOCKS 代理监听停止失败"); }
         await Task.CompletedTask;
     }
 
@@ -58,7 +60,7 @@ public sealed class SocksProxyServer : IAsyncDisposable
             try
             {
                 client = await _listener.AcceptTcpClientAsync(ct);
-                _ = HandleClientAsync(client, ct);
+                _ = ObserveBackgroundTaskAsync(HandleClientAsync(client, ct), "SOCKS 客户端处理后台任务异常");
             }
             catch (OperationCanceledException)
             {
@@ -66,7 +68,7 @@ public sealed class SocksProxyServer : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _logger.Warning(ex, "SOCKS accept loop error");
+                _logger.Warning(ex, "SOCKS 接收循环异常");
                 client?.Dispose();
             }
         }
@@ -85,7 +87,7 @@ public sealed class SocksProxyServer : IAsyncDisposable
         }
         if (version != 0x05)
         {
-            _logger.Warning("Unsupported SOCKS version {Version}", version);
+            _logger.Warning("不支持的 SOCKS 版本 {Version}", version);
             return;
         }
 
@@ -124,7 +126,7 @@ public sealed class SocksProxyServer : IAsyncDisposable
         }
         else
         {
-            _logger.Warning("Unknown ATYP {Atyp}", atyp);
+            _logger.Warning("未知 ATYP {Atyp}", atyp);
             return;
         }
 
@@ -141,46 +143,56 @@ public sealed class SocksProxyServer : IAsyncDisposable
 
         var rule = _rules.Match(host, port);
         var action = rule?.Action ?? RuleAction.Proxy;
-        var targetProfileName = rule?.Profile;
-        var shouldProxy = action == RuleAction.Proxy && !string.IsNullOrWhiteSpace(targetProfileName);
+        var targetProfileName = _routeProfileName;
+        var shouldProxy = action == RuleAction.Proxy;
+        var displayProfile = targetProfileName ?? "(当前配置)";
 
-        _logger.Information("SOCKS request {Host}:{Port} -> action {Action}", host, port, action);
+        _logger.Information(
+            "SOCKS5 命中 {Host}:{Port} => 规则={Rule}, 动作={Action}, 配置={Profile}, 路由={Route}",
+            host,
+            port,
+            rule?.Name ?? "(无)",
+            action,
+            displayProfile,
+            shouldProxy ? "代理" : "直连");
 
         TcpClient? remote = null;
         try
         {
-            if (shouldProxy && targetProfileName is not null)
+            if (shouldProxy)
             {
                 // Ensure SSH tunnel up and connect through it
                 var profiles = await _proxyManager.GetProfilesAsync(ct);
-                var profile = profiles.FirstOrDefault(p => p.Name.Equals(targetProfileName, StringComparison.OrdinalIgnoreCase));
+                var profile = !string.IsNullOrWhiteSpace(targetProfileName)
+                    ? profiles.FirstOrDefault(p => p.Name.Equals(targetProfileName, StringComparison.OrdinalIgnoreCase))
+                    : null;
                 profile ??= profiles.FirstOrDefault();
                 if (profile is null)
                 {
-                    _logger.Warning("No profile found for rule {Rule} while proxying {Host}:{Port}", rule?.Name, host, port);
-                    throw new InvalidOperationException("Profile not found");
+                    _logger.Warning("代理 {Host}:{Port} 时，规则 {Rule} 未找到对应配置", host, port, rule?.Name);
+                    throw new InvalidOperationException("未找到配置");
                 }
                 await _proxyManager.ConnectAsync(profile.Name, ct);
                 remote = await _proxyConnector.ConnectAsync(profile, host, port, ct);
+                _logger.Information("SOCKS5 上游通过 SSH 配置 {Profile} 连接成功 -> {Host}:{Port}", profile.Name, host, port);
             }
             else
             {
                 // Direct connection
                 remote = new TcpClient();
                 await remote.ConnectAsync(host, port, ct);
+                _logger.Information("SOCKS5 上游直连成功 -> {Host}:{Port}", host, port);
             }
 
             await SendSocks5Reply(stream, 0x00).AsTask(); // succeeded
 
-            // Bridge both streams
+            // Bridge both streams and make sure both copy tasks are observed.
             var remoteStream = remote.GetStream();
-            await Task.WhenAny(
-                stream.CopyToAsync(remoteStream, ct),
-                remoteStream.CopyToAsync(stream, ct));
+            await BridgeStreamsAsync(stream, remoteStream, ct);
         }
         catch (Exception ex)
         {
-            _logger.Warning(ex, "SOCKS connect failed to {Host}:{Port}", host, port);
+            _logger.Warning(ex, "SOCKS 连接 {Host}:{Port} 失败", host, port);
             await SendSocks5Reply(stream, 0x01).AsTask(); // general failure
         }
         finally
@@ -213,22 +225,52 @@ public sealed class SocksProxyServer : IAsyncDisposable
 
         var rule = _rules.Match(host, port);
         var action = rule?.Action ?? RuleAction.Proxy;
-        _logger.Information("SOCKS4 request {Host}:{Port} -> action {Action}", host, port, action);
+        var targetProfileName = _routeProfileName;
+        var shouldProxy = action == RuleAction.Proxy;
+        var displayProfile = targetProfileName ?? "(当前配置)";
+        _logger.Information(
+            "SOCKS4 命中 {Host}:{Port} => 规则={Rule}, 动作={Action}, 配置={Profile}, 路由={Route}",
+            host,
+            port,
+            rule?.Name ?? "(无)",
+            action,
+            displayProfile,
+            shouldProxy ? "代理" : "直连");
 
         TcpClient? remote = null;
         try
         {
-            remote = new TcpClient();
-            await remote.ConnectAsync(host, port, ct);
+            if (shouldProxy)
+            {
+                var profiles = await _proxyManager.GetProfilesAsync(ct);
+                var profile = !string.IsNullOrWhiteSpace(targetProfileName)
+                    ? profiles.FirstOrDefault(p => p.Name.Equals(targetProfileName, StringComparison.OrdinalIgnoreCase))
+                    : null;
+                profile ??= profiles.FirstOrDefault();
+                if (profile is null)
+                {
+                    _logger.Warning("代理 {Host}:{Port} 时，规则 {Rule} 未找到对应配置", host, port, rule?.Name);
+                    throw new InvalidOperationException("未找到配置");
+                }
+
+                await _proxyManager.ConnectAsync(profile.Name, ct);
+                remote = await _proxyConnector.ConnectAsync(profile, host, port, ct);
+                _logger.Information("SOCKS4 上游通过 SSH 配置 {Profile} 连接成功 -> {Host}:{Port}", profile.Name, host, port);
+            }
+            else
+            {
+                remote = new TcpClient();
+                await remote.ConnectAsync(host, port, ct);
+                _logger.Information("SOCKS4 上游直连成功 -> {Host}:{Port}", host, port);
+            }
+
             await SendSocks4Reply(stream, success: true, port, ipBytes, ct).AsTask();
             var remoteStream = remote.GetStream();
-            await Task.WhenAny(
-                stream.CopyToAsync(remoteStream, ct),
-                remoteStream.CopyToAsync(stream, ct));
+            await BridgeStreamsAsync(stream, remoteStream, ct);
         }
         catch (Exception ex)
         {
-            _logger.Warning(ex, "SOCKS4 connect failed to {Host}:{Port}", host, port);
+            _logger.Warning(ex, "SOCKS4 连接 {Host}:{Port} 失败", host, port);
             await SendSocks4Reply(stream, success: false, port, ipBytes, ct).AsTask();
         }
         finally
@@ -284,5 +326,58 @@ public sealed class SocksProxyServer : IAsyncDisposable
         reply[3] = (byte)(port & 0xFF);
         Array.Copy(ipBytes, 0, reply, 4, 4);
         return stream.WriteAsync(reply, ct);
+    }
+
+    private static async Task BridgeStreamsAsync(NetworkStream clientStream, NetworkStream remoteStream, CancellationToken ct)
+    {
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var cts = linkedCts.Token;
+
+        var uplink = PumpStreamAsync(clientStream, remoteStream, cts);
+        var downlink = PumpStreamAsync(remoteStream, clientStream, cts);
+
+        await Task.WhenAny(uplink, downlink);
+        linkedCts.Cancel();
+        await Task.WhenAll(uplink, downlink);
+    }
+
+    private static async Task PumpStreamAsync(Stream source, Stream destination, CancellationToken ct)
+    {
+        try
+        {
+            await source.CopyToAsync(destination, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal during connection teardown.
+        }
+        catch (ObjectDisposedException)
+        {
+            // Normal during connection teardown.
+        }
+        catch (IOException)
+        {
+            // Normal during connection teardown.
+        }
+    }
+
+    private async Task ObserveBackgroundTaskAsync(Task task, string context)
+    {
+        try
+        {
+            await task;
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected during shutdown.
+        }
+        catch (ObjectDisposedException)
+        {
+            // Expected during shutdown.
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, context);
+        }
     }
 }

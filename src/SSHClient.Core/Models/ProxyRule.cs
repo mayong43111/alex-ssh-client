@@ -9,23 +9,24 @@ public enum RuleAction
 
 public sealed record ProxyRule
 {
-    public string Name { get; init; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Lower value means higher priority. Typical range: 1-9999.
+    /// </summary>
+    public int Priority { get; set; } = 100;
 
     /// <summary>
     /// Could be domain glob, CIDR, process name, etc. (extensible)
     /// </summary>
-    public string Pattern { get; init; } = string.Empty;
+    public string Pattern { get; set; } = string.Empty;
 
     /// <summary>
-    /// Optional type hint (All/DomainSuffix/Port etc.).
-    /// If omitted, defaults to "All" in RuleEngine adapter.
+    /// Optional type hint (All/DomainSuffix/IpCidr).
+    /// If omitted, runtime mapping infers by pattern.
     /// </summary>
-    public string? Type { get; init; }
+    public string? Type { get; set; }
 
-    public RuleAction Action { get; init; } = RuleAction.Proxy;
+    public RuleAction Action { get; set; } = RuleAction.Proxy;
 
-    /// <summary>
-    /// Optional profile name to use when Action == Proxy.
-    /// </summary>
-    public string? Profile { get; init; }
 }

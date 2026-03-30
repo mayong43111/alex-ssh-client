@@ -37,4 +37,9 @@ public sealed record ProxyProfile
     /// Whether to verify server host key (recommended true).
     /// </summary>
     public bool StrictHostKeyChecking { get; init; } = true;
+
+    /// <summary>
+    /// Rules scoped to this profile only.
+    /// </summary>
+    public IList<ProxyRule> Rules { get; init; } = new List<ProxyRule>();
 }

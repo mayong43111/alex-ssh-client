@@ -19,15 +19,17 @@ public sealed class HttpProxyServer : IAsyncDisposable
     private readonly IProxyManager _proxyManager;
     private readonly IProxyConnector _proxyConnector;
     private readonly int _port;
+    private readonly string? _routeProfileName;
     private readonly TcpListener _listener;
     private CancellationTokenSource? _cts;
 
-    public HttpProxyServer(IRuleEngine rules, IProxyManager proxyManager, IProxyConnector proxyConnector, int port, ILogger? logger = null)
+    public HttpProxyServer(IRuleEngine rules, IProxyManager proxyManager, IProxyConnector proxyConnector, int port, ILogger? logger = null, string? routeProfileName = null)
     {
         _rules = rules;
         _proxyManager = proxyManager;
         _proxyConnector = proxyConnector;
         _port = port;
+        _routeProfileName = routeProfileName;
         _listener = new TcpListener(IPAddress.Loopback, port);
         _logger = logger ?? Serilog.Log.Logger;
     }
@@ -36,8 +38,8 @@ public sealed class HttpProxyServer : IAsyncDisposable
     {
         _cts = new CancellationTokenSource();
         _listener.Start();
-        _ = AcceptLoopAsync(_cts.Token);
-        _logger.Information("HTTP proxy listening on 127.0.0.1:{Port}", _port);
+        _ = ObserveBackgroundTaskAsync(AcceptLoopAsync(_cts.Token), "HTTP 接收循环后台任务异常");
+        _logger.Information("HTTP 代理已监听 127.0.0.1:{Port}", _port);
     }
 
     public async Task StopAsync()
@@ -53,7 +55,7 @@ public sealed class HttpProxyServer : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.Warning(ex, "HTTP proxy listener stop failed");
+            _logger.Warning(ex, "HTTP 代理监听停止失败");
         }
         await Task.CompletedTask;
     }
@@ -66,7 +68,7 @@ public sealed class HttpProxyServer : IAsyncDisposable
             try
             {
                 client = await _listener.AcceptTcpClientAsync(ct);
-                _ = HandleClientAsync(client, ct);
+                _ = ObserveBackgroundTaskAsync(HandleClientAsync(client, ct), "HTTP 客户端处理后台任务异常");
             }
             catch (OperationCanceledException)
             {
@@ -74,7 +76,7 @@ public sealed class HttpProxyServer : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _logger.Warning(ex, "HTTP proxy accept loop error");
+                _logger.Warning(ex, "HTTP 接收循环异常");
                 client?.Dispose();
             }
         }
@@ -94,6 +96,8 @@ public sealed class HttpProxyServer : IAsyncDisposable
         if (parts.Length < 2) return;
         var method = parts[0];
         var target = parts[1];
+        var httpVersion = parts.Length > 2 ? parts[2] : "HTTP/1.1";
+        Uri? requestUri = null;
 
         string host;
         int port;
@@ -105,39 +109,57 @@ public sealed class HttpProxyServer : IAsyncDisposable
         }
         else
         {
-            var uri = new Uri(target);
-            host = uri.Host;
-            port = uri.Port;
+            requestUri = new Uri(target);
+            host = requestUri.Host;
+            port = requestUri.Port;
         }
 
         var rule = _rules.Match(host, port);
         var action = rule?.Action ?? RuleAction.Proxy;
-        var targetProfileName = rule?.Profile;
-        var shouldProxy = action == RuleAction.Proxy && !string.IsNullOrWhiteSpace(targetProfileName);
-        _logger.Information("HTTP proxy {Method} {Host}:{Port} -> action {Action}", method, host, port, action);
+        var targetProfileName = _routeProfileName;
+        var shouldProxy = action == RuleAction.Proxy;
+        var displayProfile = targetProfileName ?? "(当前配置)";
+        _logger.Information(
+            "HTTP 命中 {Method} {Host}:{Port} => 规则={Rule}, 动作={Action}, 配置={Profile}, 路由={Route}",
+            method,
+            host,
+            port,
+            rule?.Name ?? "(无)",
+            action,
+            displayProfile,
+            shouldProxy ? "代理" : "直连");
 
-        // Consume headers until empty line
+        // Read and preserve headers for non-CONNECT requests.
+        var headers = new List<string>();
         string? line;
-        while (!string.IsNullOrEmpty(line = await reader.ReadLineAsync())) { }
+        while (!string.IsNullOrEmpty(line = await reader.ReadLineAsync()))
+        {
+            headers.Add(line);
+        }
 
         TcpClient? remote = null;
         try
         {
-            if (shouldProxy && targetProfileName is not null)
+            if (shouldProxy)
             {
                 var profiles = await _proxyManager.GetProfilesAsync(ct);
-                var profile = profiles.FirstOrDefault(p => p.Name.Equals(targetProfileName, StringComparison.OrdinalIgnoreCase)) ?? profiles.FirstOrDefault();
+                var profile = !string.IsNullOrWhiteSpace(targetProfileName)
+                    ? profiles.FirstOrDefault(p => p.Name.Equals(targetProfileName, StringComparison.OrdinalIgnoreCase))
+                    : null;
+                profile ??= profiles.FirstOrDefault();
                 if (profile is null)
                 {
-                    throw new InvalidOperationException("Profile not found for HTTP proxy rule");
+                    throw new InvalidOperationException("HTTP 代理规则未找到配置");
                 }
                 await _proxyManager.ConnectAsync(profile.Name, ct);
                 remote = await _proxyConnector.ConnectAsync(profile, host, port, ct);
+                _logger.Information("HTTP 上游通过 SSH 配置 {Profile} 连接成功 -> {Host}:{Port}", profile.Name, host, port);
             }
             else
             {
                 remote = new TcpClient();
                 await remote.ConnectAsync(host, port, ct);
+                _logger.Information("HTTP 上游直连成功 -> {Host}:{Port}", host, port);
             }
             var remoteStream = remote.GetStream();
 
@@ -147,15 +169,31 @@ public sealed class HttpProxyServer : IAsyncDisposable
                 await writer.WriteLineAsync("Proxy-Agent: SSHClientProxy");
                 await writer.WriteLineAsync();
                 await writer.FlushAsync();
-                // Tunnel raw
-                await Task.WhenAny(
-                    stream.CopyToAsync(remoteStream, ct),
-                    remoteStream.CopyToAsync(stream, ct));
+                // Tunnel raw and ensure both copy tasks are observed.
+                await BridgeStreamsAsync(stream, remoteStream, ct);
             }
             else
             {
-                // Forward original request (with absolute URI already provided by browser)
-                var requestBuffer = Encoding.ASCII.GetBytes(requestLine + "\r\n\r\n");
+                var requestPath = requestUri?.PathAndQuery;
+                if (string.IsNullOrWhiteSpace(requestPath))
+                {
+                    requestPath = "/";
+                }
+
+                var outgoing = new StringBuilder();
+                outgoing.Append(method).Append(' ').Append(requestPath).Append(' ').Append(httpVersion).Append("\r\n");
+                foreach (var header in headers)
+                {
+                    if (header.StartsWith("Proxy-Connection", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    outgoing.Append(header).Append("\r\n");
+                }
+                outgoing.Append("\r\n");
+
+                var requestBuffer = Encoding.ASCII.GetBytes(outgoing.ToString());
                 await remoteStream.WriteAsync(requestBuffer, ct);
                 await remoteStream.FlushAsync(ct);
                 await remoteStream.CopyToAsync(stream, ct);
@@ -163,7 +201,7 @@ public sealed class HttpProxyServer : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.Warning(ex, "HTTP proxy connect failed to {Host}:{Port}", host, port);
+            _logger.Warning(ex, "HTTP 代理连接 {Host}:{Port} 失败", host, port);
             if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase))
             {
                 await writer.WriteLineAsync("HTTP/1.1 502 Bad Gateway");
@@ -173,6 +211,59 @@ public sealed class HttpProxyServer : IAsyncDisposable
         finally
         {
             remote?.Dispose();
+        }
+    }
+
+    private static async Task BridgeStreamsAsync(NetworkStream clientStream, NetworkStream remoteStream, CancellationToken ct)
+    {
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var tunnelToken = linkedCts.Token;
+
+        var uplink = PumpStreamAsync(clientStream, remoteStream, tunnelToken);
+        var downlink = PumpStreamAsync(remoteStream, clientStream, tunnelToken);
+
+        await Task.WhenAny(uplink, downlink);
+        linkedCts.Cancel();
+        await Task.WhenAll(uplink, downlink);
+    }
+
+    private static async Task PumpStreamAsync(Stream source, Stream destination, CancellationToken ct)
+    {
+        try
+        {
+            await source.CopyToAsync(destination, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal during tunnel close.
+        }
+        catch (ObjectDisposedException)
+        {
+            // Normal during tunnel close.
+        }
+        catch (IOException)
+        {
+            // Normal during tunnel close.
+        }
+    }
+
+    private async Task ObserveBackgroundTaskAsync(Task task, string context)
+    {
+        try
+        {
+            await task;
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected during shutdown.
+        }
+        catch (ObjectDisposedException)
+        {
+            // Expected during shutdown.
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, context);
         }
     }
 }
