@@ -1,20 +1,17 @@
 # SSH Client
 
-一个独立实现的 Windows 桌面 SSH 客户端（.NET 8 + WPF）。
+一个面向 Windows 的 SSH 桌面客户端，使用 .NET 8 与 WPF 实现。
 
-本项目聚焦于“通过 SSH 建立上游链路，并在本机提供 HTTP/SOCKS 代理入口 + 规则路由能力”。
+本项目聚焦 SSH 连接管理、配置管理与桌面交互体验，适合本地开发与日常运维场景。
 
 ## 主要能力
-- WPF 客户端 + MVVM（CommunityToolkit.Mvvm）
-- Profile 管理（保存、另存为、读取）
-- 登录后启动本地代理监听（单端口 Mixed）：
-  - HTTP: `127.0.0.1:1080`
-  - SOCKS5: `127.0.0.1:1080`
-- 规则路由（Profile 级规则，支持 DomainSuffix/IpCidr/All）
-- 规则编辑弹窗与列表双击编辑（默认项不允许在弹窗中编辑，且不可删除）
-- 托盘最小化行为（首次询问 + 持久化偏好）
-- 结构化日志（Serilog，UI 实时日志 + 文件日志）
-- 测试与 CI（xUnit + GitHub Actions）
+- SSH 配置管理（新增、保存、读取、另存为）
+- 登录 / 登出流程与状态反馈
+- 支持密码与公钥两种认证方式
+- 实时日志面板与诊断启动模式
+- 托盘最小化行为与偏好持久化
+- 基于 MVVM 的可维护结构（CommunityToolkit.Mvvm）
+- 单元测试与持续集成（xUnit + GitHub Actions）
 
 ## 运行环境
 - Windows 10/11
@@ -28,20 +25,20 @@ dotnet run --project src/SSHClient.App
 dotnet test
 ```
 
-诊断运行（建议排查时使用）：
+诊断启动：
 ```bash
 dotnet run --project src/SSHClient.App -- --diag
 ```
 
-## 配置说明
-配置文件：`src/SSHClient.App/appsettings.json`
+## 配置文件
+应用配置文件位于：src/SSHClient.App/appsettings.json
 
-当前结构要点：
-- 规则是 **Profile 内部字段**（`Profiles[i].Rules`）
-- 应用状态会持久化：
-  - `ActiveProfileName`
-  - `ActiveProfileFilePath`
-  - `MinimizeToTray`
+常用字段：
+- SSHClient.Profiles：连接配置列表
+- SSHClient.ActiveProfileName：当前配置名称
+- SSHClient.ActiveProfileFilePath：当前配置来源文件路径
+- SSHClient.MinimizeToTray：最小化行为偏好
+- SSHClient.Logging：日志等级与日志文件路径
 
 示例：
 ```json
@@ -50,12 +47,6 @@ dotnet run --project src/SSHClient.App -- --diag
     "Logging": {
       "MinimumLevel": "Information",
       "LogPath": "logs/sshclient-.log"
-    },
-    "Proxy": {
-      "HttpPort": 8888,
-      "SocksPort": 1080,
-      "EnableOnStartup": true,
-      "ToggleSystemProxy": false
     },
     "Profiles": [
       {
@@ -71,15 +62,7 @@ dotnet run --project src/SSHClient.App -- --diag
         "LocalSocksPort": 1080,
         "JumpHosts": [],
         "StrictHostKeyChecking": true,
-        "Rules": [
-          {
-            "Name": "默认",
-            "Priority": 9999,
-            "Pattern": "*",
-            "Type": "All",
-            "Action": "Direct"
-          }
-        ]
+        "Rules": []
       }
     ],
     "ActiveProfileName": "SampleSSH",
@@ -88,31 +71,6 @@ dotnet run --project src/SSHClient.App -- --diag
   }
 }
 ```
-
-## 代理使用说明
-- HTTP 代理地址：`http://127.0.0.1:1080`
-- SOCKS5 代理地址：`socks5://127.0.0.1:1080`
-
-说明：
-- 当前版本使用单端口 Mixed 模式，HTTP 与 SOCKS5 共用 `SocksPort`（默认 1080）。
-- `HttpPort` 配置项暂保留用于兼容旧配置，不再用于单独监听。
-
-命令行示例：
-```bash
-curl -x http://127.0.0.1:1080 https://example.com
-curl --socks5 127.0.0.1:1080 https://example.com
-```
-
-Git 通过本地 SOCKS5 代理：
-```bash
-git config --local http.proxy socks5h://127.0.0.1:1080
-git config --local https.proxy socks5h://127.0.0.1:1080
-```
-
-## 规则行为说明
-- 域名规则支持多条输入（`;` 或换行分隔）
-- 通配规则 `*.example.com` 可匹配 `example.com` 和其子域
-- 运行时总会追加最终兜底规则 `All/* -> Direct`，避免无命中时隐式走代理
 
 ## 项目结构
 ```text
@@ -125,12 +83,12 @@ SSHClient.sln
 ```
 
 ## 文档
-- 架构文档：`docs/ARCHITECTURE.md`
-- 重构记录：`docs/REFACTOR_PLAN.md`
+- docs/ARCHITECTURE.md：架构说明
+- docs/REFACTOR_PLAN.md：重构记录
 
 ## 安全建议
 - 优先使用公钥认证
-- 避免提交真实凭据到仓库
+- 不要将真实凭据提交到仓库
 
 ## 许可证
-MIT，见 `LICENSE`。
+MIT，见 LICENSE。
