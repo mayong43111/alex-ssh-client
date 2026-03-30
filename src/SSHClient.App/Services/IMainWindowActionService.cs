@@ -1,4 +1,5 @@
 using System.Windows;
+using Serilog;
 using SSHClient.App.ViewModels;
 
 namespace SSHClient.App.Services;
@@ -50,20 +51,28 @@ public sealed class MainWindowActionService : IMainWindowActionService
 
     public async Task HandleLoadFromFileAsync(Window owner, MainViewModel vm)
     {
-        var sourcePath = _profileFileDialogService.ChooseImportPath(owner);
-        if (string.IsNullOrWhiteSpace(sourcePath))
+        try
         {
-            return;
-        }
+            var sourcePath = _profileFileDialogService.ChooseImportPath(owner);
+            if (string.IsNullOrWhiteSpace(sourcePath))
+            {
+                return;
+            }
 
-        var error = await vm.ProfilesVM.ImportProfileFromFileAsync(sourcePath);
-        if (!string.IsNullOrWhiteSpace(error))
+            var error = await vm.ProfilesVM.ImportProfileFromFileAsync(sourcePath);
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                MessageBox.Show(owner, error, "加载失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            MessageBox.Show(owner, $"已加载：{sourcePath}", "加载完成", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
         {
-            MessageBox.Show(owner, error, "加载失败", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
+            Log.Error(ex, "加载配置文件异常");
+            MessageBox.Show(owner, $"加载失败：{ex.Message}", "加载失败", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
-
-        MessageBox.Show(owner, $"已加载：{sourcePath}", "加载完成", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     public async Task HandleAddRuleAsync(Window owner, MainViewModel vm)

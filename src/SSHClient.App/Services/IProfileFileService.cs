@@ -25,7 +25,7 @@ public sealed class ProfileFileService : IProfileFileService
 
     public string GetDefaultProfileFilePath()
     {
-        return Path.Combine(AppContext.BaseDirectory, DefaultProfileFileName);
+        return Path.Combine(GetAppDataDirectory(), DefaultProfileFileName);
     }
 
     public string NormalizePathOrNull(string? filePath)
@@ -49,7 +49,7 @@ public sealed class ProfileFileService : IProfileFileService
             }
         }
 
-        return AppContext.BaseDirectory;
+        return GetAppDataDirectory();
     }
 
     public string GetCurrentExportFileName(string? activeProfileFilePath, string? selectedProfileName)
@@ -104,5 +104,13 @@ public sealed class ProfileFileService : IProfileFileService
 
         await using var stream = File.OpenRead(fullPath);
         return await JsonSerializer.DeserializeAsync<ProxyProfile>(stream, ProfileFileJsonOptions, cancellationToken);
+    }
+
+    private static string GetAppDataDirectory()
+    {
+        var baseDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var appDir = Path.Combine(baseDir, "AlexSSHClient");
+        Directory.CreateDirectory(appDir);
+        return appDir;
     }
 }

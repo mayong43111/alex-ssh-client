@@ -6,6 +6,7 @@ namespace SSHClient.Core.Services;
 public sealed class FileConfigService : IConfigService
 {
     private readonly string _configPath;
+    private readonly string _legacyConfigPath;
     private readonly JsonSerializerOptions _options = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
@@ -13,20 +14,29 @@ public sealed class FileConfigService : IConfigService
 
     public FileConfigService(string? configPath = null)
     {
-        _configPath = configPath ?? Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        _legacyConfigPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        _configPath = configPath ?? Path.Combine(GetAppDataDirectory(), "appsettings.json");
     }
 
     public async Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default)
     {
-        if (!File.Exists(_configPath))
+        if (File.Exists(_configPath))
         {
-            return new AppSettings();
+            await using var stream = File.OpenRead(_configPath);
+            var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, _options, cancellationToken)
+                           ?? new AppSettings();
+            return settings;
         }
 
-        await using var stream = File.OpenRead(_configPath);
-        var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, _options, cancellationToken)
-                       ?? new AppSettings();
-        return settings;
+        if (File.Exists(_legacyConfigPath))
+        {
+            await using var stream = File.OpenRead(_legacyConfigPath);
+            var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, _options, cancellationToken)
+                           ?? new AppSettings();
+            return settings;
+        }
+
+        return new AppSettings();
     }
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
@@ -34,5 +44,11 @@ public sealed class FileConfigService : IConfigService
         Directory.CreateDirectory(Path.GetDirectoryName(_configPath)!);
         await using var stream = File.Create(_configPath);
         await JsonSerializer.SerializeAsync(stream, settings, _options, cancellationToken);
+    }
+
+    private static string GetAppDataDirectory()
+    {
+        var baseDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return Path.Combine(baseDir, "AlexSSHClient");
     }
 }
