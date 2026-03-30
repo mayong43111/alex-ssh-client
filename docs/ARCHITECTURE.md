@@ -25,12 +25,18 @@ c:\repos\SSH Client
   - `Bootstrap/`：启动分层模块
     - `AppHostFactory`：Host 构建、DI 注册、Serilog 配置
     - `GlobalExceptionHooks`：全局异常事件挂钩
-    - `AppRuntime`：主窗口显示、后台服务启停
+    - `AppRuntime`：主窗口显示、退出看门狗与后台停止编排
   - `ViewModels/`：`MainViewModel`, `ProfilesViewModel`
   - `MainWindow.xaml`：紧凑登录界面（Login/About）+ 内嵌日志区
-  - `MainWindow.xaml.cs`：日志框自动滚动到末尾（新日志持续向下滚动）
+  - `MainWindow.xaml.cs`：窗口事件桥接（托盘行为、文件对话框与规则编辑流程已委托到服务）
   - `Logging/`：`RollingUiLogService`, `UiLogSink`（内存滚动日志 + Serilog UI Sink）
   - `Services/ProxyHost`：在配置允许时启动/停止 HTTP+SOCKS 代理、系统代理切换
+  - `Services/TrayBehaviorService`：托盘行为与最小化策略编排
+  - `Services/ProfileFileDialogService`：文件对话框抽象
+  - `Services/MainWindowActionService`：窗口业务交互动作（另存为/读取/规则编辑）
+  - `Services/MinimizePreferenceService`：最小化偏好持久化
+  - `Services/ProfileFileService`：Profile 文件导入导出
+  - `Services/RuleNormalizationService`：规则归一化算法
   - `StartupProbe`：诊断日志写入 `%TEMP%\sshclient-startup.log`
 
 ---
@@ -41,11 +47,11 @@ c:\repos\SSH Client
 3. 注册全局异常挂钩：`GlobalExceptionHooks.Register(this)`
 4. 通过 `AppHostFactory.Build(args)` 构建 `Host`（`Host.CreateDefaultBuilder + appsettings.json`）
 5. 注册服务（DI）：
-  - Core：`IConfigService`, `ISshTunnelService`, `Func<ISshTunnelService>`, `IProxyConnector`, `IProxyManager`, `IRuleEngine`, `ISystemProxyService`
-  - App：`ProxyHost`, `MainWindow`, `ProfilesViewModel`, `MainViewModel`, `IUiLogService`
+  - Core：`IConfigService`, `ISshTunnelService`, `Func<ISshTunnelService>`, `IProxyConnector`, `IProxyManager`, `ISystemProxyService`
+  - App：`ProxyHost`, `MainWindow`, `ProfilesViewModel`, `MainViewModel`, `IUiLogService`, `ITrayBehaviorService`, `IProfileFileDialogService`, `IMainWindowActionService`, `IMinimizePreferenceService`, `IProfileFileService`, `IRuleNormalizationService`
 6. `Host.Start()`
 7. `AppRuntime.ShowMainWindow()` 显示主窗体
-8. `AppRuntime.StartBackgroundServicesAsync()` 后台启动 `ProxyHost`
+8. 代理监听默认不在启动时开启，登录成功后由 `ProfilesViewModel.ConnectAsync` 调用 `ProxyHost.StartAsync(forceStart: true)`
 9. 退出时（`OnExit`）：
   - `_host.StopAsync(1s)`
   - `AppRuntime.StopBackgroundServicesAsync(2s)`
@@ -64,10 +70,10 @@ c:\repos\SSH Client
 ### `ProxyManager`
 - 管理 SSH Profile 缓存与连接生命周期
 - 关键接口：
-  - `GetProfilesAsync()`：加载并缓存配置
-  - `ConnectAsync(profileName)`：使用 `Func<ISshTunnelService>` 生成 Tunnel，调用 `ISshTunnelService.StartAsync`
+  - `GetProfilesAsync()`：按需加载并缓存配置
+  - `ConnectAsync(profileName)`：使用 `Func<ISshTunnelService>` 获取 Tunnel，调用 `ISshTunnelService.StartAsync`
   - `DisconnectAsync(profileName)`：停止并清理 Tunnel
-- 注意：DI 中显式注册 `Func<ISshTunnelService>`（懒加载/独立生命周期）
+- 注意：当前连接流程已避免每次连接都强制 Reload，减少热路径重复配置加载
 
 ### `SshTunnelService`
 - 提供 SSH 隧道功能，支持 `SSHNET` 条件编译
@@ -81,12 +87,13 @@ c:\repos\SSH Client
 - 在 stub 模式下回退到直接 `TcpClient.ConnectAsync`
 
 ### `RuleEngine`
-- 根据目标 `host:port` 匹配 `Rule`，返回 `RuleAction`（Proxy/Direct/Block 等）以及指定 Profile 名称
+- 根据目标 `host:port` 匹配 `Rule`，返回 `ProxyRuleEx`（包含 `Action` 与匹配元信息）
 - 被 HTTP/ SOCKS 代理调用
 
 ### `HttpProxyServer` / `SocksProxyServer`
 - 基于 `TcpListener` 实现，支持取消（`CancellationTokenSource`）
 - HTTP 支持 `CONNECT` 以及普通请求；根据 Rule 决定直连或通过 SSH Profile
+- 两者已复用 `UpstreamRouteConnector`，统一上游路由与连接决策
 - 停止逻辑安全（捕获 `OperationCanceledException` 和 socket 停止异常）
 
 ### `ProxyHost`（App 层）
@@ -137,8 +144,10 @@ c:\repos\SSH Client
       "EnableOnStartup": true,
       "ToggleSystemProxy": false
     },
-    "Profiles": [ /* ProxyProfile 列表 */ ],
-    "Rules": [ /* Rule 列表 */ ]
+    "Profiles": [ /* ProxyProfile 列表（每个 Profile 内含 Rules） */ ],
+    "ActiveProfileName": "Default",
+    "ActiveProfileFilePath": "default.profile.json",
+    "MinimizeToTray": true
   }
 }
 ```
@@ -165,7 +174,7 @@ c:\repos\SSH Client
 ---
 
 ## 🧪 测试
-- `dotnet test` 当前 7/7 通过（规则、配置、管理器等）
+- `dotnet test` 当前 14/14 通过（规则引擎、配置持久化、管理器、上游连接抽象等）
 - 建议后续添加：
   - 规则匹配覆盖更多 pattern（wildcard、CIDR、端口范围）
   - 代理端到端集成测试（可用 TestContainers 或本地 loopback mock server）
@@ -192,15 +201,21 @@ c:\repos\SSH Client
 - `src/SSHClient.App/App.xaml.cs` → 启动编排、`--minimal`、异常兜底
 - `src/SSHClient.App/Bootstrap/AppHostFactory.cs` → Host 构建、DI、Serilog
 - `src/SSHClient.App/Bootstrap/GlobalExceptionHooks.cs` → 全局异常挂钩
-- `src/SSHClient.App/Bootstrap/AppRuntime.cs` → 主窗口显示、后台服务启停
+- `src/SSHClient.App/Bootstrap/AppRuntime.cs` → 主窗口显示、退出看门狗、后台停止编排
 - `src/SSHClient.App/MainWindow.xaml` → Login/About UI 与内嵌日志面板
-- `src/SSHClient.App/MainWindow.xaml.cs` → 日志框自动滚动行为
+- `src/SSHClient.App/MainWindow.xaml.cs` → 窗口事件桥接
 - `src/SSHClient.App/Logging/*.cs` → UI 滚动日志管线
 - `src/SSHClient.App/ViewModels/*.cs` → MVVM 逻辑（当前主用 Main/Profiles）
 - `src/SSHClient.App/Services/ProxyHost.cs` → 聚合代理启动/停止
+- `src/SSHClient.App/Services/IMainWindowActionService.cs` → 主窗口动作编排
+- `src/SSHClient.App/Services/ITrayBehaviorService.cs` → 托盘行为与最小化策略
+- `src/SSHClient.App/Services/IProfileFileDialogService.cs` → 文件对话框抽象
+- `src/SSHClient.App/Services/IProfileFileService.cs` → 配置文件导入导出
+- `src/SSHClient.App/Services/IRuleNormalizationService.cs` → 规则归一化
 - `src/SSHClient.Core/Services/ProxyManager.cs` → Profile & Tunnel 管理
 - `src/SSHClient.Core/Services/SshTunnelService.cs` → SSH 隧道（SSHNET/stub）
 - `src/SSHClient.Core/Proxy/*.cs` → HTTP/SOCKS proxy 实现 & RuleEngine
+- `src/SSHClient.Core/Proxy/UpstreamRouteConnector.cs` → HTTP/SOCKS 共用上游路由连接
 - `src/SSHClient.Core/Services/FileConfigService.cs` → appsettings JSON 持久化
 
 ---

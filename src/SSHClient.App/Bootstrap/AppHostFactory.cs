@@ -57,6 +57,12 @@ public static class AppHostFactory
                 services.AddSingleton<IProxyManager, ProxyManager>();
                 services.AddSingleton<ProxyHost>();
                 services.AddSingleton<ISystemProxyService, SystemProxyService>();
+                services.AddSingleton<IMinimizePreferenceService, MinimizePreferenceService>();
+                services.AddSingleton<IProfileFileService, ProfileFileService>();
+                services.AddSingleton<IRuleNormalizationService, RuleNormalizationService>();
+                services.AddSingleton<ITrayBehaviorService, TrayBehaviorService>();
+                services.AddSingleton<IProfileFileDialogService, ProfileFileDialogService>();
+                services.AddSingleton<IMainWindowActionService, MainWindowActionService>();
                 services.AddSingleton<IUiLogService>(uiLogService);
 
                 services.AddSingleton<ProfilesViewModel>();

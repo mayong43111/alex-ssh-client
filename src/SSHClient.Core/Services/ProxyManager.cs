@@ -20,6 +20,7 @@ public sealed class ProxyManager : IProxyManager
     private readonly Dictionary<string, ISshTunnelService> _activeTunnels = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ProxyProfile> _profiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _mutex = new(1, 1);
+    private bool _profilesLoaded;
 
     public ProxyManager(IConfigService configService, Func<ISshTunnelService> tunnelFactory, ILogger? logger = null)
     {
@@ -39,6 +40,8 @@ public sealed class ProxyManager : IProxyManager
             {
                 _profiles[profile.Name] = profile;
             }
+
+            _profilesLoaded = true;
         }
         finally
         {
@@ -48,7 +51,7 @@ public sealed class ProxyManager : IProxyManager
 
     public async Task<IReadOnlyList<ProxyProfile>> GetProfilesAsync(CancellationToken cancellationToken = default)
     {
-        await ReloadAsync(cancellationToken);
+        await EnsureProfilesLoadedAsync(cancellationToken);
         await _mutex.WaitAsync(cancellationToken);
         try
         {
@@ -62,7 +65,7 @@ public sealed class ProxyManager : IProxyManager
 
     public async Task<bool> ConnectAsync(string profileName, CancellationToken cancellationToken = default)
     {
-        await ReloadAsync(cancellationToken);
+        await EnsureProfilesLoadedAsync(cancellationToken);
         await _mutex.WaitAsync(cancellationToken);
         try
         {
@@ -101,6 +104,31 @@ public sealed class ProxyManager : IProxyManager
             }
 
             return success;
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
+    private async Task EnsureProfilesLoadedAsync(CancellationToken cancellationToken)
+    {
+        await _mutex.WaitAsync(cancellationToken);
+        try
+        {
+            if (_profilesLoaded)
+            {
+                return;
+            }
+
+            _profiles.Clear();
+            var settings = await _configService.LoadAsync(cancellationToken);
+            foreach (var profile in settings.Profiles)
+            {
+                _profiles[profile.Name] = profile;
+            }
+
+            _profilesLoaded = true;
         }
         finally
         {

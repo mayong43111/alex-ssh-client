@@ -140,11 +140,39 @@ public class ProxyManagerTests
         success.Should().BeFalse();
     }
 
+    [Fact]
+    public async Task ConnectAsync_Should_NotReload_Config_On_Every_Call()
+    {
+        var appSettings = new AppSettings
+        {
+            Profiles =
+            {
+                new ProxyProfile { Name = "P1", Host = "example.com", Username = "user", AuthMethod = SshAuthMethod.Password, Password = "pwd" }
+            }
+        };
+
+        var configService = new InMemoryConfigService(appSettings);
+        var tunnel = new FakeSshTunnelService();
+        var proxyManager = new ProxyManager(configService, () => tunnel);
+
+        var first = await proxyManager.ConnectAsync("P1");
+        var second = await proxyManager.ConnectAsync("P1");
+
+        first.Should().BeTrue();
+        second.Should().BeTrue();
+        configService.LoadCount.Should().Be(1);
+    }
+
     private sealed class InMemoryConfigService : IConfigService
     {
         private readonly AppSettings _settings;
         public InMemoryConfigService(AppSettings settings) => _settings = settings;
-        public Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(_settings);
+        public int LoadCount { get; private set; }
+        public Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            LoadCount++;
+            return Task.FromResult(_settings);
+        }
         public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 

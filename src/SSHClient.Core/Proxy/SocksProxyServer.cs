@@ -21,16 +21,25 @@ public sealed class SocksProxyServer : IAsyncDisposable
     private readonly IProxyConnector _proxyConnector;
     private readonly int _port;
     private readonly string? _routeProfileName;
+    private readonly ProxyProfile? _routeProfile;
     private readonly TcpListener _listener;
     private CancellationTokenSource? _cts;
 
-    public SocksProxyServer(IRuleEngine rules, IProxyManager proxyManager, IProxyConnector proxyConnector, int port, ILogger? logger = null, string? routeProfileName = null)
+    public SocksProxyServer(
+        IRuleEngine rules,
+        IProxyManager proxyManager,
+        IProxyConnector proxyConnector,
+        int port,
+        ILogger? logger = null,
+        string? routeProfileName = null,
+        ProxyProfile? routeProfile = null)
     {
         _rules = rules;
         _proxyManager = proxyManager;
         _proxyConnector = proxyConnector;
         _port = port;
         _routeProfileName = routeProfileName;
+        _routeProfile = routeProfile;
         _listener = new TcpListener(IPAddress.Loopback, port);
         _logger = logger ?? Serilog.Log.Logger;
     }
@@ -141,48 +150,20 @@ public sealed class SocksProxyServer : IAsyncDisposable
             return;
         }
 
-        var rule = _rules.Match(host, port);
-        var action = rule?.Action ?? RuleAction.Proxy;
-        var targetProfileName = _routeProfileName;
-        var shouldProxy = action == RuleAction.Proxy;
-        var displayProfile = targetProfileName ?? "(当前配置)";
-
-        _logger.Information(
-            "SOCKS5 命中 {Host}:{Port} => 规则={Rule}, 动作={Action}, 配置={Profile}, 路由={Route}",
-            host,
-            port,
-            rule?.Name ?? "(无)",
-            action,
-            displayProfile,
-            shouldProxy ? "代理" : "直连");
-
         TcpClient? remote = null;
         try
         {
-            if (shouldProxy)
-            {
-                // Ensure SSH tunnel up and connect through it
-                var profiles = await _proxyManager.GetProfilesAsync(ct);
-                var profile = !string.IsNullOrWhiteSpace(targetProfileName)
-                    ? profiles.FirstOrDefault(p => p.Name.Equals(targetProfileName, StringComparison.OrdinalIgnoreCase))
-                    : null;
-                profile ??= profiles.FirstOrDefault();
-                if (profile is null)
-                {
-                    _logger.Warning("代理 {Host}:{Port} 时，规则 {Rule} 未找到对应配置", host, port, rule?.Name);
-                    throw new InvalidOperationException("未找到配置");
-                }
-                await _proxyManager.ConnectAsync(profile.Name, ct);
-                remote = await _proxyConnector.ConnectAsync(profile, host, port, ct);
-                _logger.Information("SOCKS5 上游通过 SSH 配置 {Profile} 连接成功 -> {Host}:{Port}", profile.Name, host, port);
-            }
-            else
-            {
-                // Direct connection
-                remote = new TcpClient();
-                await remote.ConnectAsync(host, port, ct);
-                _logger.Information("SOCKS5 上游直连成功 -> {Host}:{Port}", host, port);
-            }
+            remote = await UpstreamRouteConnector.ConnectAsync(
+                "SOCKS5",
+                host,
+                port,
+                _rules,
+                _proxyManager,
+                _proxyConnector,
+                _logger,
+                _routeProfile,
+                _routeProfileName,
+                ct);
 
             await SendSocks5Reply(stream, 0x00).AsTask(); // succeeded
 
@@ -223,46 +204,20 @@ public sealed class SocksProxyServer : IAsyncDisposable
             return;
         }
 
-        var rule = _rules.Match(host, port);
-        var action = rule?.Action ?? RuleAction.Proxy;
-        var targetProfileName = _routeProfileName;
-        var shouldProxy = action == RuleAction.Proxy;
-        var displayProfile = targetProfileName ?? "(当前配置)";
-        _logger.Information(
-            "SOCKS4 命中 {Host}:{Port} => 规则={Rule}, 动作={Action}, 配置={Profile}, 路由={Route}",
-            host,
-            port,
-            rule?.Name ?? "(无)",
-            action,
-            displayProfile,
-            shouldProxy ? "代理" : "直连");
-
         TcpClient? remote = null;
         try
         {
-            if (shouldProxy)
-            {
-                var profiles = await _proxyManager.GetProfilesAsync(ct);
-                var profile = !string.IsNullOrWhiteSpace(targetProfileName)
-                    ? profiles.FirstOrDefault(p => p.Name.Equals(targetProfileName, StringComparison.OrdinalIgnoreCase))
-                    : null;
-                profile ??= profiles.FirstOrDefault();
-                if (profile is null)
-                {
-                    _logger.Warning("代理 {Host}:{Port} 时，规则 {Rule} 未找到对应配置", host, port, rule?.Name);
-                    throw new InvalidOperationException("未找到配置");
-                }
-
-                await _proxyManager.ConnectAsync(profile.Name, ct);
-                remote = await _proxyConnector.ConnectAsync(profile, host, port, ct);
-                _logger.Information("SOCKS4 上游通过 SSH 配置 {Profile} 连接成功 -> {Host}:{Port}", profile.Name, host, port);
-            }
-            else
-            {
-                remote = new TcpClient();
-                await remote.ConnectAsync(host, port, ct);
-                _logger.Information("SOCKS4 上游直连成功 -> {Host}:{Port}", host, port);
-            }
+            remote = await UpstreamRouteConnector.ConnectAsync(
+                "SOCKS4",
+                host,
+                port,
+                _rules,
+                _proxyManager,
+                _proxyConnector,
+                _logger,
+                _routeProfile,
+                _routeProfileName,
+                ct);
 
             await SendSocks4Reply(stream, success: true, port, ipBytes, ct).AsTask();
             var remoteStream = remote.GetStream();

@@ -1,6 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
-using System.Text.Json;
+using SSHClient.App.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Serilog;
@@ -13,22 +13,15 @@ using System.Collections.Generic;
 
 public partial class ProfilesViewModel : ObservableObject
 {
-    private const string DefaultRuleName = "默认";
-    private const int DefaultRulePriority = 9999;
     private const string DefaultProfileName = "Default";
-    private const string DefaultProfileFileName = "default.profile.json";
-
-    private static readonly JsonSerializerOptions ProfileFileJsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        WriteIndented = true,
-    };
 
     private readonly IProxyManager _proxyManager;
     private readonly IConfigService _configService;
-    private readonly SSHClient.App.Services.ProxyHost _proxyHost;
+    private readonly ProxyHost _proxyHost;
+    private readonly IMinimizePreferenceService _minimizePreferenceService;
+    private readonly IProfileFileService _profileFileService;
+    private readonly IRuleNormalizationService _ruleNormalizationService;
     private string? _activeProfileFilePath;
-    private bool? _minimizeToTray;
-    private bool _isMinimizeBehaviorLoaded;
 
     public ObservableCollection<ProxyProfile> Profiles { get; } = new();
     public ObservableCollection<ProxyRule> Rules { get; } = new();
@@ -72,11 +65,20 @@ public partial class ProfilesViewModel : ObservableObject
         ? (IsLoggedIn ? "登出中..." : "登录中...")
         : (IsLoggedIn ? "登出" : "登录");
 
-    public ProfilesViewModel(IProxyManager proxyManager, IConfigService configService, SSHClient.App.Services.ProxyHost proxyHost)
+    public ProfilesViewModel(
+        IProxyManager proxyManager,
+        IConfigService configService,
+        ProxyHost proxyHost,
+        IMinimizePreferenceService minimizePreferenceService,
+        IProfileFileService profileFileService,
+        IRuleNormalizationService ruleNormalizationService)
     {
         _proxyManager = proxyManager;
         _configService = configService;
         _proxyHost = proxyHost;
+        _minimizePreferenceService = minimizePreferenceService;
+        _profileFileService = profileFileService;
+        _ruleNormalizationService = ruleNormalizationService;
         _ = RefreshAsync();
     }
 
@@ -97,8 +99,6 @@ public partial class ProfilesViewModel : ObservableObject
     private async Task RefreshAsync()
     {
         var settings = await _configService.LoadAsync();
-        _minimizeToTray = settings.MinimizeToTray;
-        _isMinimizeBehaviorLoaded = true;
 
         var profiles = settings.Profiles.ToList();
         var createdDefault = false;
@@ -114,16 +114,16 @@ public partial class ProfilesViewModel : ObservableObject
             Profiles.Add(profile);
         }
 
-        _activeProfileFilePath = NormalizePathOrNull(settings.ActiveProfileFilePath);
+        _activeProfileFilePath = _profileFileService.NormalizePathOrNull(settings.ActiveProfileFilePath);
         if (!string.IsNullOrWhiteSpace(_activeProfileFilePath))
         {
-            var loadedFromFile = await TryReadProfileFileAsync(_activeProfileFilePath);
+            var loadedFromFile = await _profileFileService.ReadProfileAsync(_activeProfileFilePath);
             if (loadedFromFile is not null)
             {
                 var normalizedLoaded = loadedFromFile with
                 {
                     JumpHosts = (loadedFromFile.JumpHosts ?? new List<string>()).ToList(),
-                    Rules = NormalizeRules(loadedFromFile.Rules ?? Array.Empty<ProxyRule>()),
+                    Rules = _ruleNormalizationService.NormalizeRules(loadedFromFile.Rules ?? Array.Empty<ProxyRule>()),
                 };
 
                 UpsertProfile(normalizedLoaded);
@@ -144,11 +144,11 @@ public partial class ProfilesViewModel : ObservableObject
             _activeProfileFilePath = GetDefaultProfileFilePath();
             if (SelectedProfile is not null)
             {
-                await WriteProfileToFileAsync(_activeProfileFilePath, SelectedProfile with
+                await _profileFileService.WriteProfileAsync(_activeProfileFilePath, SelectedProfile with
                 {
                     Name = DefaultProfileName,
                     JumpHosts = (SelectedProfile.JumpHosts ?? new List<string>()).ToList(),
-                    Rules = NormalizeRules(SelectedProfile.Rules ?? Array.Empty<ProxyRule>()),
+                    Rules = _ruleNormalizationService.NormalizeRules(SelectedProfile.Rules ?? Array.Empty<ProxyRule>()),
                 });
             }
 
@@ -158,25 +158,12 @@ public partial class ProfilesViewModel : ObservableObject
 
     public async Task<bool?> GetMinimizeToTrayPreferenceAsync()
     {
-        if (_isMinimizeBehaviorLoaded)
-        {
-            return _minimizeToTray;
-        }
-
-        var settings = await _configService.LoadAsync();
-        _minimizeToTray = settings.MinimizeToTray;
-        _isMinimizeBehaviorLoaded = true;
-        return _minimizeToTray;
+        return await _minimizePreferenceService.GetMinimizeToTrayPreferenceAsync();
     }
 
     public async Task SetMinimizeToTrayPreferenceAsync(bool? minimizeToTray)
     {
-        _minimizeToTray = minimizeToTray;
-        _isMinimizeBehaviorLoaded = true;
-
-        var settings = await _configService.LoadAsync();
-        settings.MinimizeToTray = minimizeToTray;
-        await _configService.SaveAsync(settings);
+        await _minimizePreferenceService.SetMinimizeToTrayPreferenceAsync(minimizeToTray);
     }
 
     [RelayCommand]
@@ -228,42 +215,23 @@ public partial class ProfilesViewModel : ObservableObject
 
     public string GetSuggestedRuleName() => $"规则-{Rules.Count + 1}";
 
-    public int GetSuggestedRulePriority() => NextRulePriority();
+    public int GetSuggestedRulePriority() => _ruleNormalizationService.GetNextRulePriority(Rules);
 
     public string GetDefaultProfileFilePath()
     {
-        return Path.Combine(AppContext.BaseDirectory, DefaultProfileFileName);
+        return _profileFileService.GetDefaultProfileFilePath();
     }
 
-    public string GetDefaultProfileFileName() => DefaultProfileFileName;
+    public string GetDefaultProfileFileName() => Path.GetFileName(GetDefaultProfileFilePath());
 
     public string GetCurrentProfileExportDirectory()
     {
-        if (!string.IsNullOrWhiteSpace(_activeProfileFilePath))
-        {
-            var dir = Path.GetDirectoryName(_activeProfileFilePath);
-            if (!string.IsNullOrWhiteSpace(dir))
-            {
-                return dir;
-            }
-        }
-
-        return AppContext.BaseDirectory;
+        return _profileFileService.GetCurrentExportDirectory(_activeProfileFilePath);
     }
 
     public string GetCurrentProfileExportFileName()
     {
-        if (!string.IsNullOrWhiteSpace(_activeProfileFilePath))
-        {
-            var currentName = Path.GetFileName(_activeProfileFilePath);
-            if (!string.IsNullOrWhiteSpace(currentName))
-            {
-                return currentName;
-            }
-        }
-
-        var profileName = string.IsNullOrWhiteSpace(SelectedProfile?.Name) ? "profile" : SelectedProfile.Name;
-        return $"{profileName}.profile.json";
+        return _profileFileService.GetCurrentExportFileName(_activeProfileFilePath, SelectedProfile?.Name);
     }
 
     public async Task<string?> ExportSelectedProfileAsync(string? targetPath)
@@ -279,9 +247,9 @@ public partial class ProfilesViewModel : ObservableObject
             return "请选择保存路径。";
         }
 
-        var fullPath = Path.GetFullPath(filePath);
+        var fullPath = _profileFileService.NormalizePathOrNull(filePath);
 
-        var snapshotRules = NormalizeRules(Rules)
+        var snapshotRules = _ruleNormalizationService.NormalizeRules(Rules)
             .Select(r => new ProxyRule
             {
                 Name = r.Name,
@@ -299,7 +267,7 @@ public partial class ProfilesViewModel : ObservableObject
             Rules = snapshotRules,
         };
 
-        await WriteProfileToFileAsync(fullPath, profileToSave);
+        await _profileFileService.WriteProfileAsync(fullPath, profileToSave);
         _activeProfileFilePath = fullPath;
         await SaveAsync();
         Log.Information("配置文件已导出：{Profile} -> {Path}", profileToSave.Name, fullPath);
@@ -314,20 +282,15 @@ public partial class ProfilesViewModel : ObservableObject
             return "请选择要加载的文件。";
         }
 
-        var fullPath = Path.GetFullPath(filePath);
-        if (!File.Exists(fullPath))
-        {
-            return "文件不存在。";
-        }
-
-        var loaded = await TryReadProfileFileAsync(fullPath);
+        var fullPath = _profileFileService.NormalizePathOrNull(filePath);
+        var loaded = await _profileFileService.ReadProfileAsync(fullPath);
 
         if (loaded is null || string.IsNullOrWhiteSpace(loaded.Name))
         {
             return "文件内容无效，未找到配置名称。";
         }
 
-        var normalizedRules = NormalizeRules(loaded.Rules ?? Array.Empty<ProxyRule>());
+        var normalizedRules = _ruleNormalizationService.NormalizeRules(loaded.Rules ?? Array.Empty<ProxyRule>());
         loaded = loaded with
         {
             JumpHosts = (loaded.JumpHosts ?? new List<string>()).ToList(),
@@ -344,20 +307,20 @@ public partial class ProfilesViewModel : ObservableObject
         return null;
     }
 
-    public bool IsDefaultRuleItem(ProxyRule? rule) => IsDefaultRule(rule);
+    public bool IsDefaultRuleItem(ProxyRule? rule) => _ruleNormalizationService.IsDefaultRule(rule);
 
     public async Task AddRuleFromDialogAsync(ProxyRule rule)
     {
         var normalizedRule = new ProxyRule
         {
             Name = string.IsNullOrWhiteSpace(rule.Name) ? GetSuggestedRuleName() : rule.Name.Trim(),
-            Priority = Math.Clamp(rule.Priority <= 0 ? NextRulePriority() : rule.Priority, 1, DefaultRulePriority - 1),
+            Priority = Math.Clamp(rule.Priority <= 0 ? GetSuggestedRulePriority() : rule.Priority, 1, _ruleNormalizationService.DefaultRulePriority - 1),
             Pattern = string.IsNullOrWhiteSpace(rule.Pattern) ? "*" : rule.Pattern.Trim(),
-            Type = NormalizeRuleType(rule.Type, rule.Pattern),
+            Type = _ruleNormalizationService.NormalizeRuleType(rule.Type, rule.Pattern),
             Action = rule.Action,
         };
 
-        var defaultIndex = Rules.ToList().FindIndex(IsDefaultRule);
+        var defaultIndex = Rules.ToList().FindIndex(_ruleNormalizationService.IsDefaultRule);
         if (defaultIndex >= 0)
         {
             Rules.Insert(defaultIndex, normalizedRule);
@@ -380,18 +343,18 @@ public partial class ProfilesViewModel : ObservableObject
         }
 
         ProxyRule normalizedRule;
-        if (IsDefaultRule(originalRule))
+        if (_ruleNormalizationService.IsDefaultRule(originalRule))
         {
-            normalizedRule = CreateDefaultRule(editedRule.Action);
+            normalizedRule = _ruleNormalizationService.CreateDefaultRule(editedRule.Action);
         }
         else
         {
             normalizedRule = new ProxyRule
             {
                 Name = string.IsNullOrWhiteSpace(editedRule.Name) ? originalRule.Name : editedRule.Name.Trim(),
-                Priority = Math.Clamp(editedRule.Priority <= 0 ? originalRule.Priority : editedRule.Priority, 1, DefaultRulePriority - 1),
+                Priority = Math.Clamp(editedRule.Priority <= 0 ? originalRule.Priority : editedRule.Priority, 1, _ruleNormalizationService.DefaultRulePriority - 1),
                 Pattern = string.IsNullOrWhiteSpace(editedRule.Pattern) ? "*" : editedRule.Pattern.Trim(),
-                Type = NormalizeRuleType(editedRule.Type, editedRule.Pattern),
+                Type = _ruleNormalizationService.NormalizeRuleType(editedRule.Type, editedRule.Pattern),
                 Action = editedRule.Action,
             };
         }
@@ -409,7 +372,7 @@ public partial class ProfilesViewModel : ObservableObject
             return;
         }
 
-        if (IsDefaultRule(SelectedRule))
+        if (_ruleNormalizationService.IsDefaultRule(SelectedRule))
         {
             Log.Warning("默认规则不可删除，仅可编辑动作");
             return;
@@ -548,7 +511,7 @@ public partial class ProfilesViewModel : ObservableObject
 
     private bool CanOperateOnSelection() => SelectedProfile is not null;
 
-    private bool CanOperateOnRuleSelection() => SelectedRule is not null && !IsDefaultRule(SelectedRule);
+    private bool CanOperateOnRuleSelection() => SelectedRule is not null && !_ruleNormalizationService.IsDefaultRule(SelectedRule);
 
     private bool CanConnect()
     {
@@ -569,7 +532,7 @@ public partial class ProfilesViewModel : ObservableObject
 
         if (SelectedProfile is not null)
         {
-            var normalizedRules = NormalizeRules(Rules);
+            var normalizedRules = _ruleNormalizationService.NormalizeRules(Rules);
             var selectedIndex = Profiles.IndexOf(SelectedProfile);
             if (selectedIndex >= 0)
             {
@@ -588,10 +551,6 @@ public partial class ProfilesViewModel : ObservableObject
 
         settings.ActiveProfileName = SelectedProfile?.Name;
         settings.ActiveProfileFilePath = _activeProfileFilePath;
-        if (_isMinimizeBehaviorLoaded)
-        {
-            settings.MinimizeToTray = _minimizeToTray;
-        }
 
         await _configService.SaveAsync(settings);
         await PersistActiveProfileFileIfNeededAsync();
@@ -612,44 +571,10 @@ public partial class ProfilesViewModel : ObservableObject
         var snapshot = SelectedProfile with
         {
             JumpHosts = (SelectedProfile.JumpHosts ?? new List<string>()).ToList(),
-            Rules = NormalizeRules(SelectedProfile.Rules ?? Array.Empty<ProxyRule>()),
+            Rules = _ruleNormalizationService.NormalizeRules(SelectedProfile.Rules ?? Array.Empty<ProxyRule>()),
         };
 
-        await WriteProfileToFileAsync(_activeProfileFilePath, snapshot);
-    }
-
-    private static async Task WriteProfileToFileAsync(string filePath, ProxyProfile profile)
-    {
-        var dir = Path.GetDirectoryName(filePath);
-        if (!string.IsNullOrWhiteSpace(dir))
-        {
-            Directory.CreateDirectory(dir);
-        }
-
-        await using var stream = File.Create(filePath);
-        await JsonSerializer.SerializeAsync(stream, profile, ProfileFileJsonOptions);
-    }
-
-    private static async Task<ProxyProfile?> TryReadProfileFileAsync(string filePath)
-    {
-        var fullPath = NormalizePathOrNull(filePath);
-        if (string.IsNullOrWhiteSpace(fullPath) || !File.Exists(fullPath))
-        {
-            return null;
-        }
-
-        await using var stream = File.OpenRead(fullPath);
-        return await JsonSerializer.DeserializeAsync<ProxyProfile>(stream, ProfileFileJsonOptions);
-    }
-
-    private static string? NormalizePathOrNull(string? filePath)
-    {
-        if (string.IsNullOrWhiteSpace(filePath))
-        {
-            return null;
-        }
-
-        return Path.GetFullPath(filePath);
+        await _profileFileService.WriteProfileAsync(_activeProfileFilePath, snapshot);
     }
 
     private void UpsertProfile(ProxyProfile profile)
@@ -742,93 +667,10 @@ public partial class ProfilesViewModel : ObservableObject
         }
     }
 
-    private static bool IsDefaultRule(ProxyRule? rule)
-        => rule is not null && string.Equals(rule.Name, DefaultRuleName, StringComparison.Ordinal);
-
-    private static ProxyRule CreateDefaultRule(RuleAction action)
-        => new()
-        {
-            Name = DefaultRuleName,
-            Priority = DefaultRulePriority,
-            Pattern = "*",
-            Type = "All",
-            Action = action,
-        };
-
-    private static List<ProxyRule> NormalizeRules(IEnumerable<ProxyRule> rules)
-    {
-        var input = rules.ToList();
-        var defaultAction = input.FirstOrDefault(IsDefaultRule)?.Action ?? RuleAction.Direct;
-
-        var normalized = input
-            .Where(r => !IsDefaultRule(r))
-            .Select(r => new ProxyRule
-            {
-                Name = r.Name,
-                Priority = Math.Clamp(r.Priority <= 0 ? 100 : r.Priority, 1, DefaultRulePriority - 1),
-                Pattern = r.Pattern,
-                Type = NormalizeRuleType(r.Type, r.Pattern),
-                Action = r.Action,
-            })
-            .OrderBy(r => r.Priority)
-            .ThenBy(r => r.Name, StringComparer.Ordinal)
-            .ToList();
-
-        normalized.Add(CreateDefaultRule(defaultAction));
-        return normalized;
-    }
-
-    private static string NormalizeRuleType(string? type, string? pattern)
-    {
-        if (string.Equals(type, "All", StringComparison.OrdinalIgnoreCase))
-        {
-            return "All";
-        }
-
-        if (string.Equals(type, "IpCidr", StringComparison.OrdinalIgnoreCase))
-        {
-            return "IpCidr";
-        }
-
-        if (!string.IsNullOrWhiteSpace(type) && string.Equals(type, "DomainSuffix", StringComparison.OrdinalIgnoreCase))
-        {
-            return "DomainSuffix";
-        }
-
-        if (string.Equals(pattern, "*", StringComparison.Ordinal))
-        {
-            return "All";
-        }
-
-        if (!string.IsNullOrWhiteSpace(pattern) && pattern.Contains('/'))
-        {
-            return "IpCidr";
-        }
-
-        return "DomainSuffix";
-    }
-
-    private int NextRulePriority()
-    {
-        var max = Rules
-            .Where(r => !IsDefaultRule(r))
-            .Select(r => r.Priority)
-            .DefaultIfEmpty(0)
-            .Max();
-
-        if (max <= 0)
-        {
-            return 10;
-        }
-
-        var stepped = ((max / 10) + 1) * 10;
-        return Math.Min(stepped, DefaultRulePriority - 1);
-    }
-
     private void LoadRulesForSelectedProfile(ProxyProfile? profile)
     {
         Rules.Clear();
-        var normalizedRules = NormalizeRules(profile?.Rules ?? Array.Empty<ProxyRule>());
+        var normalizedRules = _ruleNormalizationService.NormalizeRules(profile?.Rules ?? Array.Empty<ProxyRule>());
         foreach (var rule in normalizedRules)
         {
             Rules.Add(rule);

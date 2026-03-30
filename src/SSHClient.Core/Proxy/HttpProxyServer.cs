@@ -20,16 +20,25 @@ public sealed class HttpProxyServer : IAsyncDisposable
     private readonly IProxyConnector _proxyConnector;
     private readonly int _port;
     private readonly string? _routeProfileName;
+    private readonly ProxyProfile? _routeProfile;
     private readonly TcpListener _listener;
     private CancellationTokenSource? _cts;
 
-    public HttpProxyServer(IRuleEngine rules, IProxyManager proxyManager, IProxyConnector proxyConnector, int port, ILogger? logger = null, string? routeProfileName = null)
+    public HttpProxyServer(
+        IRuleEngine rules,
+        IProxyManager proxyManager,
+        IProxyConnector proxyConnector,
+        int port,
+        ILogger? logger = null,
+        string? routeProfileName = null,
+        ProxyProfile? routeProfile = null)
     {
         _rules = rules;
         _proxyManager = proxyManager;
         _proxyConnector = proxyConnector;
         _port = port;
         _routeProfileName = routeProfileName;
+        _routeProfile = routeProfile;
         _listener = new TcpListener(IPAddress.Loopback, port);
         _logger = logger ?? Serilog.Log.Logger;
     }
@@ -114,20 +123,7 @@ public sealed class HttpProxyServer : IAsyncDisposable
             port = requestUri.Port;
         }
 
-        var rule = _rules.Match(host, port);
-        var action = rule?.Action ?? RuleAction.Proxy;
-        var targetProfileName = _routeProfileName;
-        var shouldProxy = action == RuleAction.Proxy;
-        var displayProfile = targetProfileName ?? "(当前配置)";
-        _logger.Information(
-            "HTTP 命中 {Method} {Host}:{Port} => 规则={Rule}, 动作={Action}, 配置={Profile}, 路由={Route}",
-            method,
-            host,
-            port,
-            rule?.Name ?? "(无)",
-            action,
-            displayProfile,
-            shouldProxy ? "代理" : "直连");
+        var protocol = $"HTTP[{method}]";
 
         // Read and preserve headers for non-CONNECT requests.
         var headers = new List<string>();
@@ -140,27 +136,17 @@ public sealed class HttpProxyServer : IAsyncDisposable
         TcpClient? remote = null;
         try
         {
-            if (shouldProxy)
-            {
-                var profiles = await _proxyManager.GetProfilesAsync(ct);
-                var profile = !string.IsNullOrWhiteSpace(targetProfileName)
-                    ? profiles.FirstOrDefault(p => p.Name.Equals(targetProfileName, StringComparison.OrdinalIgnoreCase))
-                    : null;
-                profile ??= profiles.FirstOrDefault();
-                if (profile is null)
-                {
-                    throw new InvalidOperationException("HTTP 代理规则未找到配置");
-                }
-                await _proxyManager.ConnectAsync(profile.Name, ct);
-                remote = await _proxyConnector.ConnectAsync(profile, host, port, ct);
-                _logger.Information("HTTP 上游通过 SSH 配置 {Profile} 连接成功 -> {Host}:{Port}", profile.Name, host, port);
-            }
-            else
-            {
-                remote = new TcpClient();
-                await remote.ConnectAsync(host, port, ct);
-                _logger.Information("HTTP 上游直连成功 -> {Host}:{Port}", host, port);
-            }
+            remote = await UpstreamRouteConnector.ConnectAsync(
+                protocol,
+                host,
+                port,
+                _rules,
+                _proxyManager,
+                _proxyConnector,
+                _logger,
+                _routeProfile,
+                _routeProfileName,
+                ct);
             var remoteStream = remote.GetStream();
 
             if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase))

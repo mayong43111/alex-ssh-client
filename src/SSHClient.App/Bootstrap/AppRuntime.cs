@@ -40,23 +40,6 @@ public static class AppRuntime
         Log.Information("主窗口已显示");
     }
 
-    public static async Task StartBackgroundServicesAsync(IServiceProvider services)
-    {
-        try
-        {
-            var proxyHost = services.GetService<ProxyHost>();
-            if (proxyHost is not null)
-            {
-                await proxyHost.StartAsync();
-            }
-        }
-        catch (Exception ex)
-        {
-            StartupProbe.Log($"代理宿主启动失败: {ex}");
-            Log.Error(ex, "启动代理宿主失败");
-        }
-    }
-
     public static async Task StopBackgroundServicesAsync(IServiceProvider services, TimeSpan timeout)
     {
         try

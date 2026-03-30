@@ -64,8 +64,22 @@ public sealed class ProxyHost : IAsyncDisposable
         var runtimeRuleEngine = new RuleEngine(BuildRuntimeRules(activeProfile?.Rules ?? Array.Empty<ProxyRule>()));
         var routeProfileName = activeProfile?.Name;
 
-        var http = new HttpProxyServer(runtimeRuleEngine, _proxyManager, _proxyConnector, proxySettings.HttpPort, _logger, routeProfileName: routeProfileName);
-        var socks = new SocksProxyServer(runtimeRuleEngine, _proxyManager, _proxyConnector, proxySettings.SocksPort, _logger, routeProfileName: routeProfileName);
+        var http = new HttpProxyServer(
+            runtimeRuleEngine,
+            _proxyManager,
+            _proxyConnector,
+            proxySettings.HttpPort,
+            _logger,
+            routeProfileName: routeProfileName,
+            routeProfile: activeProfile);
+        var socks = new SocksProxyServer(
+            runtimeRuleEngine,
+            _proxyManager,
+            _proxyConnector,
+            proxySettings.SocksPort,
+            _logger,
+            routeProfileName: routeProfileName,
+            routeProfile: activeProfile);
         lock (_sync)
         {
             _http = http;

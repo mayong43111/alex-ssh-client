@@ -87,6 +87,17 @@ public sealed class RuleEngine : IRuleEngine
 
     private static bool IsDomainMatch(ProxyRuleEx rule, string host)
     {
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            return false;
+        }
+
+        var normalizedHost = host.Trim().TrimEnd('.');
+        if (normalizedHost.Length == 0)
+        {
+            return false;
+        }
+
         var patterns = SplitDomainPatterns(rule.Pattern);
         if (patterns.Count == 0)
         {
@@ -100,10 +111,21 @@ public sealed class RuleEngine : IRuleEngine
                 return true;
             }
 
+            // Treat leading wildcard as both root and subdomain match for better UX.
+            if (pattern.StartsWith("*.", StringComparison.Ordinal))
+            {
+                var baseDomain = pattern[2..];
+                if (normalizedHost.Equals(baseDomain, StringComparison.OrdinalIgnoreCase)
+                    || normalizedHost.EndsWith('.' + baseDomain, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
             if (pattern.Contains('*'))
             {
                 var regexPattern = "^" + Regex.Escape(pattern).Replace("\\*", ".*") + "$";
-                if (Regex.IsMatch(host, regexPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                if (Regex.IsMatch(normalizedHost, regexPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                 {
                     return true;
                 }
@@ -111,13 +133,13 @@ public sealed class RuleEngine : IRuleEngine
                 continue;
             }
 
-            if (rule.Type == RuleMatchType.DomainKeyword && host.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+            if (rule.Type == RuleMatchType.DomainKeyword && normalizedHost.Contains(pattern, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
 
-            if (host.Equals(pattern, StringComparison.OrdinalIgnoreCase)
-                || host.EndsWith('.' + pattern, StringComparison.OrdinalIgnoreCase))
+            if (normalizedHost.Equals(pattern, StringComparison.OrdinalIgnoreCase)
+                || normalizedHost.EndsWith('.' + pattern, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
