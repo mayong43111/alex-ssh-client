@@ -99,6 +99,7 @@ public partial class ProfilesViewModel : ObservableObject
     private async Task RefreshAsync()
     {
         var settings = await _configService.LoadAsync();
+        var shouldPersistState = false;
 
         var profiles = settings.Profiles.ToList();
         var createdDefault = false;
@@ -120,11 +121,18 @@ public partial class ProfilesViewModel : ObservableObject
             var loadedFromFile = await _profileFileService.ReadProfileAsync(_activeProfileFilePath);
             if (loadedFromFile is not null)
             {
+                var sourceRules = (loadedFromFile.Rules ?? Array.Empty<ProxyRule>()).ToList();
+                var normalizedRules = _ruleNormalizationService.NormalizeRules(sourceRules);
                 var normalizedLoaded = loadedFromFile with
                 {
                     JumpHosts = (loadedFromFile.JumpHosts ?? new List<string>()).ToList(),
-                    Rules = _ruleNormalizationService.NormalizeRules(loadedFromFile.Rules ?? Array.Empty<ProxyRule>()),
+                    Rules = normalizedRules,
                 };
+
+                if (!AreRulesEquivalent(sourceRules, normalizedRules))
+                {
+                    shouldPersistState = true;
+                }
 
                 UpsertProfile(normalizedLoaded);
                 settings.ActiveProfileName = normalizedLoaded.Name;
@@ -132,6 +140,7 @@ public partial class ProfilesViewModel : ObservableObject
             else
             {
                 _activeProfileFilePath = null;
+                shouldPersistState = true;
             }
         }
 
@@ -152,6 +161,12 @@ public partial class ProfilesViewModel : ObservableObject
                 });
             }
 
+            await SaveAsync();
+            return;
+        }
+
+        if (shouldPersistState)
+        {
             await SaveAsync();
         }
     }
@@ -665,6 +680,30 @@ public partial class ProfilesViewModel : ObservableObject
         {
             IsConnecting = false;
         }
+    }
+
+    private static bool AreRulesEquivalent(IReadOnlyList<ProxyRule> source, IReadOnlyList<ProxyRule> normalized)
+    {
+        if (source.Count != normalized.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < source.Count; i++)
+        {
+            var left = source[i];
+            var right = normalized[i];
+            if (!string.Equals(left.Name, right.Name, StringComparison.Ordinal)
+                || left.Priority != right.Priority
+                || !string.Equals(left.Pattern, right.Pattern, StringComparison.Ordinal)
+                || !string.Equals(left.Type, right.Type, StringComparison.Ordinal)
+                || left.Action != right.Action)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void LoadRulesForSelectedProfile(ProxyProfile? profile)

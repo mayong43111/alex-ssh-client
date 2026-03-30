@@ -75,8 +75,23 @@ public sealed class ProfileFileService : IProfileFileService
             Directory.CreateDirectory(dir);
         }
 
-        await using var stream = File.Create(filePath);
-        await JsonSerializer.SerializeAsync(stream, profile, ProfileFileJsonOptions, cancellationToken);
+        var tempPath = filePath + ".tmp";
+        try
+        {
+            await using (var stream = File.Create(tempPath))
+            {
+                await JsonSerializer.SerializeAsync(stream, profile, ProfileFileJsonOptions, cancellationToken);
+            }
+
+            File.Move(tempPath, filePath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
     }
 
     public async Task<ProxyProfile?> ReadProfileAsync(string filePath, CancellationToken cancellationToken = default)

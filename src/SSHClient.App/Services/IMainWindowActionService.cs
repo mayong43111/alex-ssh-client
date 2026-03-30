@@ -104,9 +104,15 @@ public sealed class MainWindowActionService : IMainWindowActionService
             return;
         }
 
+        if (vm.ProfilesVM.IsDefaultRuleItem(selectedRule))
+        {
+            MessageBox.Show(owner, "默认规则不允许编辑。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
         var dialog = new RuleEditorWindow(
             selectedRule,
-            actionOnlyMode: vm.ProfilesVM.IsDefaultRuleItem(selectedRule))
+            actionOnlyMode: false)
         {
             Owner = owner,
         };

@@ -1,6 +1,8 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
 using System.ComponentModel;
+using System.Windows.Input;
+using System.Windows.Media;
 using SSHClient.App.Services;
 
 using SSHClient.App.ViewModels;
@@ -109,6 +111,21 @@ public partial class MainWindow : Window
         await _mainWindowActionService.HandleEditRuleAsync(this, vm);
     }
 
+    private async void RulesDataGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        if (IsFromComboBox(e.OriginalSource as DependencyObject))
+        {
+            return;
+        }
+
+        await _mainWindowActionService.HandleEditRuleAsync(this, vm);
+    }
+
     private async void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
         if (_closingHandled)
@@ -142,5 +159,21 @@ public partial class MainWindow : Window
 
         textBox.CaretIndex = textBox.Text.Length;
         textBox.ScrollToEnd();
+    }
+
+    private static bool IsFromComboBox(DependencyObject? source)
+    {
+        var current = source;
+        while (current is not null)
+        {
+            if (current is ComboBox || current is ComboBoxItem)
+            {
+                return true;
+            }
+
+            current = VisualTreeHelper.GetParent(current);
+        }
+
+        return false;
     }
 }

@@ -312,8 +312,10 @@
                                        Text="说明：新增/编辑规则通过弹窗录入；类型支持 全部/域名/IP 段。域名可输入多条（; 或换行分隔），IP 段使用 CIDR；选择全部时无需输入。列表中仅可修改动作。"/>
 
                             <DataGrid Grid.Row="2"
+                                      Name="RulesDataGrid"
                                       ItemsSource="{Binding ProfilesVM.Rules}"
                                       SelectedItem="{Binding ProfilesVM.SelectedRule, Mode=TwoWay}"
+                                      MouseDoubleClick="RulesDataGrid_MouseDoubleClick"
                                       AutoGenerateColumns="False"
                                       CanUserAddRows="False"
                                       HeadersVisibility="Column"

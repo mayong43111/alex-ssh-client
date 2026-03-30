@@ -12,7 +12,7 @@ namespace SSHClient.App.Services;
 /// </summary>
 public sealed class ProxyHost : IAsyncDisposable
 {
-    private readonly object _sync = new();
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly IConfigService _configService;
     private readonly IProxyManager _proxyManager;
     private readonly ISystemProxyService _systemProxyService;
@@ -38,92 +38,106 @@ public sealed class ProxyHost : IAsyncDisposable
 
     public async Task StartAsync(CancellationToken cancellationToken = default, bool forceStart = false, string? activeProfileName = null)
     {
-        var settings = await _configService.LoadAsync(cancellationToken);
-        var proxySettings = settings.Proxy;
-
-        lock (_sync)
+        await _lifecycleGate.WaitAsync(cancellationToken);
+        try
         {
+            var settings = await _configService.LoadAsync(cancellationToken);
+            var proxySettings = settings.Proxy;
+
             if (_http is not null || _socks is not null)
             {
                 _logger.Information("代理监听器已在运行");
                 return;
             }
-        }
 
-        if (!forceStart && !proxySettings.EnableOnStartup)
-        {
-            _logger.Information("配置已禁用代理监听器");
-            return;
-        }
+            if (!forceStart && !proxySettings.EnableOnStartup)
+            {
+                _logger.Information("配置已禁用代理监听器");
+                return;
+            }
 
-        await _proxyManager.ReloadAsync(cancellationToken);
+            await _proxyManager.ReloadAsync(cancellationToken);
 
-        var activeProfile = !string.IsNullOrWhiteSpace(activeProfileName)
-            ? settings.Profiles.FirstOrDefault(p => p.Name.Equals(activeProfileName, StringComparison.OrdinalIgnoreCase))
-            : settings.Profiles.FirstOrDefault();
-        var runtimeRuleEngine = new RuleEngine(BuildRuntimeRules(activeProfile?.Rules ?? Array.Empty<ProxyRule>()));
-        var routeProfileName = activeProfile?.Name;
+            var activeProfile = !string.IsNullOrWhiteSpace(activeProfileName)
+                ? settings.Profiles.FirstOrDefault(p => p.Name.Equals(activeProfileName, StringComparison.OrdinalIgnoreCase))
+                : settings.Profiles.FirstOrDefault();
+            var runtimeRuleEngine = new RuleEngine(BuildRuntimeRules(activeProfile?.Rules ?? Array.Empty<ProxyRule>()));
+            var routeProfileName = activeProfile?.Name;
 
-        var http = new HttpProxyServer(
-            runtimeRuleEngine,
-            _proxyManager,
-            _proxyConnector,
-            proxySettings.HttpPort,
-            _logger,
-            routeProfileName: routeProfileName,
-            routeProfile: activeProfile);
-        var socks = new SocksProxyServer(
-            runtimeRuleEngine,
-            _proxyManager,
-            _proxyConnector,
-            proxySettings.SocksPort,
-            _logger,
-            routeProfileName: routeProfileName,
-            routeProfile: activeProfile);
-        lock (_sync)
-        {
+            var http = new HttpProxyServer(
+                runtimeRuleEngine,
+                _proxyManager,
+                _proxyConnector,
+                proxySettings.HttpPort,
+                _logger,
+                routeProfileName: routeProfileName,
+                routeProfile: activeProfile);
+            var socks = new SocksProxyServer(
+                runtimeRuleEngine,
+                _proxyManager,
+                _proxyConnector,
+                proxySettings.SocksPort,
+                _logger,
+                routeProfileName: routeProfileName,
+                routeProfile: activeProfile);
+
             _http = http;
             _socks = socks;
+
+            _http.Start();
+            _socks.Start();
+
+            if (proxySettings.ToggleSystemProxy)
+            {
+                await _systemProxyService.EnableAsync("127.0.0.1", proxySettings.HttpPort, proxySettings.SocksPort, cancellationToken);
+            }
         }
-
-        _http.Start();
-        _socks.Start();
-
-        if (proxySettings.ToggleSystemProxy)
+        finally
         {
-            await _systemProxyService.EnableAsync("127.0.0.1", proxySettings.HttpPort, proxySettings.SocksPort, cancellationToken);
+            _lifecycleGate.Release();
         }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        // Stop listeners with cancellation support to avoid hangs
-        if (_http is not null)
-        {
-            try { await _http.StopAsync(); }
-            catch (OperationCanceledException) { /* ignorable */ }
-            catch (Exception ex) { _logger.Warning(ex, "HTTP 代理停止异常"); }
-            await _http.DisposeAsync();
-            _http = null;
-        }
-        if (_socks is not null)
-        {
-            try { await _socks.StopAsync(); }
-            catch (OperationCanceledException) { /* ignorable */ }
-            catch (Exception ex) { _logger.Warning(ex, "SOCKS 代理停止异常"); }
-            await _socks.DisposeAsync();
-            _socks = null;
-        }
-
-        // Optionally disable system proxy on stop
+        await _lifecycleGate.WaitAsync(cancellationToken);
         try
         {
-            await _systemProxyService.DisableAsync(cancellationToken);
+            var http = _http;
+            var socks = _socks;
+            _http = null;
+            _socks = null;
+
+            // Stop listeners with cancellation support to avoid hangs
+            if (http is not null)
+            {
+                try { await http.StopAsync(); }
+                catch (OperationCanceledException) { /* ignorable */ }
+                catch (Exception ex) { _logger.Warning(ex, "HTTP 代理停止异常"); }
+                await http.DisposeAsync();
+            }
+            if (socks is not null)
+            {
+                try { await socks.StopAsync(); }
+                catch (OperationCanceledException) { /* ignorable */ }
+                catch (Exception ex) { _logger.Warning(ex, "SOCKS 代理停止异常"); }
+                await socks.DisposeAsync();
+            }
+
+            // Optionally disable system proxy on stop
+            try
+            {
+                await _systemProxyService.DisableAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) { /* ignorable */ }
+            catch (Exception ex)
+            {
+                _logger.Warning(ex, "关闭系统代理失败");
+            }
         }
-        catch (OperationCanceledException) { /* ignorable */ }
-        catch (Exception ex)
+        finally
         {
-            _logger.Warning(ex, "关闭系统代理失败");
+            _lifecycleGate.Release();
         }
     }
 
@@ -139,22 +153,17 @@ public sealed class ProxyHost : IAsyncDisposable
             .ThenBy(r => r.Name, StringComparer.Ordinal)
             .Select(MapRule)
             .ToList();
-        if (mapped.Count > 0)
-        {
-            return mapped;
-        }
 
-        // Safe default when no rule is configured: direct access.
-        return new[]
+        // Always append a final direct fallback to avoid implicit proxy default.
+        mapped.Add(new ProxyRuleEx
         {
-            new ProxyRuleEx
-            {
-                Name = "默认直连",
-                Pattern = "*",
-                Action = RuleAction.Direct,
-                Type = RuleMatchType.All,
-            }
-        };
+            Name = "最终兜底直连",
+            Pattern = "*",
+            Action = RuleAction.Direct,
+            Type = RuleMatchType.All,
+        });
+
+        return mapped;
     }
 
     private static ProxyRuleEx MapRule(ProxyRule rule)
