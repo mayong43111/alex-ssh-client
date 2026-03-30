@@ -22,16 +22,11 @@ public static class AppRuntime
 
                 if (WpfApplication.Current is { } app)
                 {
-                    app.Shutdown();
+                    if (!app.Dispatcher.HasShutdownStarted)
+                    {
+                        app.Shutdown();
+                    }
                 }
-
-                // Final fallback: if shutdown flow hangs, force process exit.
-                _ = Task.Run(async () =>
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(5));
-                    StartupProbe.Log("退出看门狗触发，强制 Environment.Exit(0)");
-                    Environment.Exit(0);
-                });
             };
         }
 

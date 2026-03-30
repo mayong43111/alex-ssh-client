@@ -31,7 +31,9 @@ dotnet run --project src/SSHClient.App -- --diag
 ```
 
 ## 配置文件
-应用配置文件位于：src/SSHClient.App/appsettings.json
+应用优先读取用户配置文件：`%LOCALAPPDATA%/AlexSSHClient/appsettings.json`
+
+若用户配置不存在或不可用，则回退读取应用目录中的 `appsettings.json`（发布包内默认配置）。
 
 常用字段：
 - SSHClient.Profiles：连接配置列表
@@ -60,8 +62,6 @@ dotnet run --project src/SSHClient.App -- --diag
         "AuthMethod": "PrivateKey",
         "LocalListenAddress": "127.0.0.1",
         "LocalSocksPort": 1080,
-        "JumpHosts": [],
-        "StrictHostKeyChecking": true,
         "Rules": []
       }
     ],
@@ -84,7 +84,9 @@ SSHClient.sln
 
 ## 文档
 - docs/ARCHITECTURE.md：架构说明
-- docs/REFACTOR_PLAN.md：重构记录
+- docs/REFACTOR_PLAN_20260330-173857.md：当前重构计划与执行记录
+- docs/DEPENDENCY_COMPATIBILITY.md：依赖与目标框架兼容策略
+- docs/PERFORMANCE_BASELINE.md：性能基线与压测记录
 
 ## 安全建议
 - 优先使用公钥认证

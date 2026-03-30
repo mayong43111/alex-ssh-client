@@ -76,30 +76,30 @@ public partial class App : WpfApplication
 
     protected override void OnExit(ExitEventArgs e)
     {
-        base.OnExit(e);
         if (_host is null)
         {
+            base.OnExit(e);
             return;
         }
 
         StartupProbe.Log("应用退出开始");
 
-        _ = Task.Run(async () =>
+        try
         {
-            try
-            {
-                await _host.StopAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
-                await AppRuntime.StopBackgroundServicesAsync(_host.Services, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                StartupProbe.Log($"应用退出清理异常: {ex}");
-            }
-            finally
-            {
-                _host.Dispose();
-                StartupProbe.Log("应用退出清理完成");
-            }
-        });
+            // Keep shutdown deterministic: wait for stop steps instead of fire-and-forget cleanup.
+            _host.StopAsync(TimeSpan.FromSeconds(1)).GetAwaiter().GetResult();
+            AppRuntime.StopBackgroundServicesAsync(_host.Services, TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            StartupProbe.Log($"应用退出清理异常: {ex}");
+        }
+        finally
+        {
+            _host.Dispose();
+            StartupProbe.Log("应用退出清理完成");
+        }
+
+        base.OnExit(e);
     }
 }

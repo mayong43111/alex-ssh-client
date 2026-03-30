@@ -26,7 +26,22 @@ jobs:
         run: dotnet build --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test --no-build --configuration Release --collect:"XPlat Code Coverage"
+        run: >
+          dotnet test tests/SSHClient.Tests/SSHClient.Tests.csproj
+          --no-build
+          --configuration Release
+          -p:CollectCoverage=true
+          -p:CoverletOutputFormat=cobertura
+          -p:Threshold=25
+          -p:ThresholdType=line
+          -p:ThresholdStat=total
+
+      - name: Critical path tests gate
+        run: >
+          dotnet test tests/SSHClient.Tests/SSHClient.Tests.csproj
+          --no-build
+          --configuration Release
+          --filter "Category=CriticalPath"
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/v')

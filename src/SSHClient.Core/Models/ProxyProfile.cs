@@ -29,16 +29,6 @@ public sealed record ProxyProfile
     public int LocalSocksPort { get; init; } = 1080;
 
     /// <summary>
-    /// Optional jump host chain. e.g. "jump1.example.com:22,jump2.example.com".
-    /// </summary>
-    public IList<string> JumpHosts { get; init; } = new List<string>();
-
-    /// <summary>
-    /// Whether to verify server host key (recommended true).
-    /// </summary>
-    public bool StrictHostKeyChecking { get; init; } = true;
-
-    /// <summary>
     /// Rules scoped to this profile only.
     /// </summary>
     public IList<ProxyRule> Rules { get; init; } = new List<ProxyRule>();

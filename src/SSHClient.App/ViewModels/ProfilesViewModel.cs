@@ -125,7 +125,6 @@ public partial class ProfilesViewModel : ObservableObject
                 var normalizedRules = _ruleNormalizationService.NormalizeRules(sourceRules);
                 var normalizedLoaded = loadedFromFile with
                 {
-                    JumpHosts = (loadedFromFile.JumpHosts ?? new List<string>()).ToList(),
                     Rules = normalizedRules,
                 };
 
@@ -156,7 +155,6 @@ public partial class ProfilesViewModel : ObservableObject
                 await _profileFileService.WriteProfileAsync(_activeProfileFilePath, SelectedProfile with
                 {
                     Name = DefaultProfileName,
-                    JumpHosts = (SelectedProfile.JumpHosts ?? new List<string>()).ToList(),
                     Rules = _ruleNormalizationService.NormalizeRules(SelectedProfile.Rules ?? Array.Empty<ProxyRule>()),
                 });
             }
@@ -275,10 +273,8 @@ public partial class ProfilesViewModel : ObservableObject
             })
             .ToList();
 
-        var snapshotJumpHosts = (SelectedProfile.JumpHosts ?? new List<string>()).ToList();
         var profileToSave = SelectedProfile with
         {
-            JumpHosts = snapshotJumpHosts,
             Rules = snapshotRules,
         };
 
@@ -308,7 +304,6 @@ public partial class ProfilesViewModel : ObservableObject
         var normalizedRules = _ruleNormalizationService.NormalizeRules(loaded.Rules ?? Array.Empty<ProxyRule>());
         loaded = loaded with
         {
-            JumpHosts = (loaded.JumpHosts ?? new List<string>()).ToList(),
             Rules = normalizedRules,
         };
 
@@ -521,9 +516,6 @@ public partial class ProfilesViewModel : ObservableObject
         }
     }
 
-    public string? JumpHostsDisplay => SelectedProfile is null ? null : string.Join(",", SelectedProfile.JumpHosts ?? new List<string>());
-
-
     private bool CanOperateOnSelection() => SelectedProfile is not null;
 
     private bool CanOperateOnRuleSelection() => SelectedRule is not null && !_ruleNormalizationService.IsDefaultRule(SelectedRule);
@@ -585,7 +577,6 @@ public partial class ProfilesViewModel : ObservableObject
 
         var snapshot = SelectedProfile with
         {
-            JumpHosts = (SelectedProfile.JumpHosts ?? new List<string>()).ToList(),
             Rules = _ruleNormalizationService.NormalizeRules(SelectedProfile.Rules ?? Array.Empty<ProxyRule>()),
         };
 

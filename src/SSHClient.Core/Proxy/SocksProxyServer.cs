@@ -116,6 +116,12 @@ public sealed class SocksProxyServer : IAsyncDisposable
         }
 
         int nMethods = stream.ReadByte();
+        if (nMethods <= 0)
+        {
+            _logger.Warning("SOCKS5 握手失败：认证方法数量无效 {MethodCount}", nMethods);
+            return;
+        }
+
         var methods = new byte[nMethods];
         await stream.ReadExactlyAsync(methods, ct);
         // No auth
@@ -138,6 +144,13 @@ public sealed class SocksProxyServer : IAsyncDisposable
         else if (atyp == 0x03)
         {
             int len = stream.ReadByte();
+            if (len <= 0)
+            {
+                _logger.Warning("SOCKS5 请求失败：域名长度无效 {Length}", len);
+                await SendSocks5Reply(stream, 0x01).AsTask();
+                return;
+            }
+
             addrBytes = new byte[len];
             await stream.ReadExactlyAsync(addrBytes, ct);
             host = Encoding.ASCII.GetString(addrBytes);

@@ -4,6 +4,7 @@ using SSHClient.Core.Proxy;
 
 namespace SSHClient.Tests;
 
+[Trait("Category", "CriticalPath")]
 public class RuleEngineTests
 {
     [Fact]

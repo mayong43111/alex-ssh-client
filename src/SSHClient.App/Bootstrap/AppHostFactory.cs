@@ -5,6 +5,7 @@ using Serilog;
 using Serilog.Events;
 using SSHClient.App.Logging;
 using SSHClient.App.Services;
+using SSHClient.Core.Configuration;
 using SSHClient.App.ViewModels;
 using SSHClient.Core.Proxy;
 using SSHClient.Core.Services;
@@ -21,7 +22,15 @@ public static class AppHostFactory
         return Host.CreateDefaultBuilder(args)
             .ConfigureAppConfiguration((_, config) =>
             {
-                config.AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
+                var packagedConfigPath = AppConfigPaths.GetPackagedConfigPath();
+                var userConfigPath = AppConfigPaths.GetUserConfigPath();
+
+                // Load packaged defaults first, then allow user config to override.
+                config.AddJsonFile(packagedConfigPath, optional: true, reloadOnChange: true);
+                if (!string.Equals(userConfigPath, packagedConfigPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    config.AddJsonFile(userConfigPath, optional: true, reloadOnChange: true);
+                }
             })
             .UseSerilog((ctx, _, serilogConfig) =>
             {

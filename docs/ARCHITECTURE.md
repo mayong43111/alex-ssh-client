@@ -1,222 +1,323 @@
-# 🧭 SSH Client Architecture Overview
+# SSH Client 架构指南（开发者全局视图）
 
-> 本文档描述当前代码状态下的整体设计、模块划分、依赖关系、启动流程、配置与日志策略，并给出扩展建议。适用于新成员上手与后续演进。
-
----
-
-## 🏗️ 顶层结构
-
-```
-c:\repos\SSH Client
-├─ src
-│  ├─ SSHClient.Core        // 核心逻辑（配置、规则引擎、代理内核、SSH Tunnel 服务）
-│  └─ SSHClient.App         // WPF 客户端（UI、DI、应用入口、系统代理控制）
-└─ tests
-   └─ SSHClient.Tests       // xUnit 测试，覆盖规则引擎、代理管理等
-```
-
-### 核心组件
-- **SSHClient.Core**
-  - `Configuration/`：`AppSettings` 等配置 POCO
-  - `Services/`：`FileConfigService`, `ProxyManager`, `SshTunnelService`, `SshProxyConnector`, `ISshTunnelService`
-  - `Proxy/`：`HttpProxyServer`, `SocksProxyServer`, `RuleEngine`, `RuleAction` 等
-- **SSHClient.App**
-  - `App.xaml` / `App.xaml.cs`：应用入口（薄壳），只负责启动流程编排与错误兜底
-  - `Bootstrap/`：启动分层模块
-    - `AppHostFactory`：Host 构建、DI 注册、Serilog 配置
-    - `GlobalExceptionHooks`：全局异常事件挂钩
-    - `AppRuntime`：主窗口显示、退出看门狗与后台停止编排
-  - `ViewModels/`：`MainViewModel`, `ProfilesViewModel`
-  - `MainWindow.xaml`：紧凑登录界面（Login/About）+ 内嵌日志区
-  - `MainWindow.xaml.cs`：窗口事件桥接（托盘行为、文件对话框与规则编辑流程已委托到服务）
-  - `Logging/`：`RollingUiLogService`, `UiLogSink`（内存滚动日志 + Serilog UI Sink）
-  - `Services/ProxyHost`：在配置允许时启动/停止 HTTP+SOCKS 代理、系统代理切换
-  - `Services/TrayBehaviorService`：托盘行为与最小化策略编排
-  - `Services/ProfileFileDialogService`：文件对话框抽象
-  - `Services/MainWindowActionService`：窗口业务交互动作（另存为/读取/规则编辑）
-  - `Services/MinimizePreferenceService`：最小化偏好持久化
-  - `Services/ProfileFileService`：Profile 文件导入导出
-  - `Services/RuleNormalizationService`：规则归一化算法
-  - `StartupProbe`：诊断日志写入 `%TEMP%\sshclient-startup.log`
+> 本文档面向后续开发者，目标是帮助你在较短时间内建立全局认知：
+> 这个系统解决什么问题、如何分层协作、关键链路如何运转、改动会影响哪里。
 
 ---
 
-## 🚀 启动流程（WPF）
-1. `App.OnStartup` 被触发
-2. 解析命令行：支持 `--minimal`（纯烟测窗口）
-3. 注册全局异常挂钩：`GlobalExceptionHooks.Register(this)`
-4. 通过 `AppHostFactory.Build(args)` 构建 `Host`（`Host.CreateDefaultBuilder + appsettings.json`）
-5. 注册服务（DI）：
-  - Core：`IConfigService`, `ISshTunnelService`, `Func<ISshTunnelService>`, `IProxyConnector`, `IProxyManager`, `ISystemProxyService`
-  - App：`ProxyHost`, `MainWindow`, `ProfilesViewModel`, `MainViewModel`, `IUiLogService`, `ITrayBehaviorService`, `IProfileFileDialogService`, `IMainWindowActionService`, `IMinimizePreferenceService`, `IProfileFileService`, `IRuleNormalizationService`
-6. `Host.Start()`
-7. `AppRuntime.ShowMainWindow()` 显示主窗体
-8. 代理监听默认不在启动时开启，登录成功后由 `ProfilesViewModel.ConnectAsync` 调用 `ProxyHost.StartAsync(forceStart: true)`
-9. 退出时（`OnExit`）：
-  - `_host.StopAsync(1s)`
-  - `AppRuntime.StopBackgroundServicesAsync(2s)`
-  - `_host.Dispose()`
+## 1. 文档定位
 
-> 🔁 `--minimal` 模式仍保留：用于快速确认 WPF 渲染/窗口显示是否正常。
+本文件回答三类问题：
+- 为什么这样设计（目标与约束）。
+- 系统如何工作（核心流程与边界）。
+- 如何安全演进（扩展点、风险点、验证方式）。
+
+本文件不追踪类级别细节。实现细节以代码与测试为准。
 
 ---
 
-## 🔩 核心服务与职责
+## 2. 系统使命与非目标
 
-### `FileConfigService` (`SSHClient.Core.Services`)
-- 负责 `appsettings.json` 读写（路径默认 `AppContext.BaseDirectory`）
-- JSON 序列化使用 `JsonSerializerDefaults.Web`
+### 2.1 系统使命
+- 提供稳定的桌面化 SSH 连接管理体验。
+- 让代理路由决策对用户可见、可控、可追踪。
+- 在保证主链路可靠的前提下持续扩展能力。
 
-### `ProxyManager`
-- 管理 SSH Profile 缓存与连接生命周期
-- 关键接口：
-  - `GetProfilesAsync()`：按需加载并缓存配置
-  - `ConnectAsync(profileName)`：使用 `Func<ISshTunnelService>` 获取 Tunnel，调用 `ISshTunnelService.StartAsync`
-  - `DisconnectAsync(profileName)`：停止并清理 Tunnel
-- 注意：当前连接流程已避免每次连接都强制 Reload，减少热路径重复配置加载
-
-### `SshTunnelService`
-- 提供 SSH 隧道功能，支持 `SSHNET` 条件编译
-- `#if SSHNET` 时使用 `Renci.SshNet` 提供的 `SshClient`, `ForwardedPortDynamic/Local`
-- `#else` 提供 stub：便于离线/无 NuGet 时编译
-- 实现 `ILocalForwardManager`（本地端口转发）
-
-### `SshProxyConnector`
-- 上层代理与规则引擎的连接器
-- 在启用 SSHNET 时：确保 Tunnel up → 建立本地转发并连接到本地端口
-- 在 stub 模式下回退到直接 `TcpClient.ConnectAsync`
-
-### `RuleEngine`
-- 根据目标 `host:port` 匹配 `Rule`，返回 `ProxyRuleEx`（包含 `Action` 与匹配元信息）
-- 被 HTTP/ SOCKS 代理调用
-
-### `HttpProxyServer` / `SocksProxyServer`
-- 基于 `TcpListener` 实现，支持取消（`CancellationTokenSource`）
-- HTTP 支持 `CONNECT` 以及普通请求；根据 Rule 决定直连或通过 SSH Profile
-- 两者已复用 `UpstreamRouteConnector`，统一上游路由与连接决策
-- 停止逻辑安全（捕获 `OperationCanceledException` 和 socket 停止异常）
-
-### `ProxyHost`（App 层）
-- 聚合配置 → 启动 HTTP/SOCKS 代理 → 可选启用系统代理
-- `StopAsync` 捕获异常，避免退出卡死
-
-### `RollingUiLogService` + `UiLogSink`（App 层）
-- Serilog 通过 `UiLogSink` 进入 UI 内存日志
-- `RollingUiLogService` 负责滚动窗口（最大 1000 条）
-- 超过 1000 条时删除最早日志，`MainViewModel.LiveLog` 订阅快照更新
-
-### `ProfilesViewModel`（App 层）
-- 负责 Profile 的加载、保存、刷新与连接
-- 无 Profile 时自动创建默认 `Default`
-- Login 页关键绑定字段：`Host`, `Port`, `LocalListenAddress`, `LocalSocksPort`, `Username`, `AuthMethod`, `Password`
-
-### `SystemProxyService`
-- 封装系统代理开关（Windows）
-- 受 `appsettings.json` 中 `ToggleSystemProxy` 控制
+### 2.2 当前非目标
+- 不追求全协议代理覆盖（优先稳定主链路）。
+- 不默认启用高风险网络能力（例如会影响安全边界的功能）。
+- 不将 UI 层与网络细节耦合在一起。
 
 ---
 
-## 🖥️ WPF MVVM
-- **View**：`MainWindow.xaml`
-  - `TabControl` 仅保留 `Login` / `About`
-  - `Login` 内包含：Server/Auth 表单 + 日志显示区
-  - 底部操作按钮：`Log in`（主按钮）+ `Save` / `Load` / `Exit`（次按钮）
-- **ViewModel**：
-  - `MainViewModel`：页面组合根 + `LiveLog` 同步
-  - `ProfilesViewModel`：加载/新增/删除/连接 Profile，保存回 `appsettings.json`
-- 使用 **CommunityToolkit.Mvvm**：`ObservableObject`, `[ObservableProperty]`, `[RelayCommand]`
+## 3. 系统上下文（Context）
 
----
+从系统边界看，SSH Client 位于本地运维工具域，主要交互对象如下：
 
-## ⚙️ 配置与日志
+1. 用户：配置连接、登录登出、查看日志、控制行为偏好。
+2. 目标 SSH 服务端：承载认证与转发通道。
+3. 本地应用流量来源：通过本地代理进入路由决策。
+4. 操作系统（Windows）：系统代理开关、进程生命周期、文件系统。
 
-### `appsettings.json`
-```json
-{
-  "SSHClient": {
-    "Logging": {
-      "MinimumLevel": "Information",
-      "LogPath": "logs/sshclient-.log"
-    },
-    "Proxy": {
-      "ListenPort": 1080,
-      "EnableOnStartup": true,
-      "ToggleSystemProxy": false
-    },
-    "Profiles": [ /* ProxyProfile 列表（每个 Profile 内含 Rules） */ ],
-    "ActiveProfileName": "Default",
-    "ActiveProfileFilePath": "default.profile.json",
-    "MinimizeToTray": true
-  }
-}
+简化上下文图：
+
+```text
+User -> WPF App -> Core Services -> SSH Server
+                 -> Local Mixed Proxy -> Target Hosts
+                 -> Windows Proxy Settings / Local File System
 ```
 
-### Serilog
-- 来源：`AppHostFactory -> Host.UseSerilog`
-- 输出：Console + 可选 rolling file（配置 `LogPath` 时启用）
-- 同步输出：`UiLogSink -> RollingUiLogService`（UI 实时日志）
-- `StartupProbe`：专用于启动阶段诊断 → `%TEMP%\sshclient-startup.log`
+架构图（高层）：
+
+```mermaid
+flowchart LR
+    U[用户]
+    T[目标服务]
+    SSH[SSH 服务端]
+    OS[Windows 系统能力\n系统代理/进程/文件系统]
+
+    subgraph APP[SSH Client 应用]
+        UI[App 层\nUI 与流程编排]
+        CORE[Core 层\n配置/连接/路由/代理]
+        CFG[(用户配置)]
+        LOG[(日志与诊断)]
+    end
+
+    U -->|登录/配置/操作| UI
+    UI -->|调用核心能力| CORE
+    CORE -->|读取与写入| CFG
+    CORE -->|结构化日志| LOG
+
+    CORE -->|建立 SSH 通道| SSH
+    CORE -->|代理与路由决策| T
+    CORE -->|系统代理开关| OS
+
+    OS -.托管环境与本地资源.-> APP
+```
 
 ---
 
-## ⏹️ 退出与资源释放
-- `App.OnExit`：
-   - `_host.StopAsync(1s)`
-   - `AppRuntime.StopBackgroundServicesAsync(2s)`
-   - `_host.Dispose()`
-- 代理监听器 (`HttpProxyServer`, `SocksProxyServer`) 的停止方法捕获取消/Socket 异常，防止 hang
+## 4. 逻辑架构分层
 
-> ✅ 已验证：`dotnet run --project src/SSHClient.App --no-build -- --diag` 后关闭窗口，进程正常退出（避免之前的卡死）。
+系统采用“应用层 + 核心层”双层架构，并通过依赖注入连接。
 
-> 注：`--diag` 不是专用业务参数；当前主要用于开发阶段配合控制台输出进行诊断。
+### 4.1 应用层（App）
+- 职责：交互编排、生命周期管理、状态呈现、系统集成。
+- 关注点：用户意图、窗口行为、命令触发、主流程控制。
 
----
+### 4.2 核心层（Core）
+- 职责：配置读写、规则判定、连接生命周期、代理与转发能力。
+- 关注点：网络行为正确性、路由一致性、容错与可测试性。
 
-## 🧪 测试
-- `dotnet test` 当前 14/14 通过（规则引擎、配置持久化、管理器、上游连接抽象等）
-- 建议后续添加：
-  - 规则匹配覆盖更多 pattern（wildcard、CIDR、端口范围）
-  - 代理端到端集成测试（可用 TestContainers 或本地 loopback mock server）
-  - SSHNET 启用下的连接测试（可用本地 sshd mock / openssh docker）
+### 4.3 分层约束
+- App 可以依赖 Core，Core 不依赖 App。
+- UI 不直接操纵底层网络细节，通过服务抽象进入核心能力。
+- 规则决策、连接执行、配置持久化属于 Core 主责。
 
 ---
 
-## 🔮 扩展路线图（建议）
-- **SSH**：加入 `known_hosts` 校验、keyboard-interactive、多跳（jump hosts）
-- **配置**：增加加密存储（密码/密钥 passphrase）
-- **UI**：
-  - Profile 测试按钮（Ping/SSH handshake）
-  - 规则测试工具（输入域名/URL → 显示匹配结果 & 决策）
-  - 托盘图标 + 快速开关系统代理
-- **网络**：
-  - HTTPS 解密（可选，需自签 CA，慎用）
-  - UDP 转发 & DNS 代理
-  - PAC 文件支持
-- **平台**：为 WinService / CLI 模式提供入口（可共享同一 Core）
+## 5. 核心能力地图
+
+可以把系统拆成 5 条主能力链：
+
+1. 配置链：读取配置 -> 归一化 -> 选择生效配置 -> 持久化。
+2. 连接链：登录触发 -> 建立 SSH 通道 -> 维护连接状态。
+3. 路由链：请求进入 -> 规则匹配 -> 动作决策（代理/直连/拒绝）。
+4. 代理链：启动监听 -> 协议识别 -> 上游连接 -> 双向转发。
+5. 可观测链：结构化日志 -> UI 实时日志 -> 启动诊断日志。
+
+这 5 条链路共同构成系统主干，任一改动都应明确影响哪条链路。
 
 ---
 
-## 🧷 关键词索引（文件 → 功能）
-- `src/SSHClient.App/App.xaml.cs` → 启动编排、`--minimal`、异常兜底
-- `src/SSHClient.App/Bootstrap/AppHostFactory.cs` → Host 构建、DI、Serilog
-- `src/SSHClient.App/Bootstrap/GlobalExceptionHooks.cs` → 全局异常挂钩
-- `src/SSHClient.App/Bootstrap/AppRuntime.cs` → 主窗口显示、退出看门狗、后台停止编排
-- `src/SSHClient.App/MainWindow.xaml` → Login/About UI 与内嵌日志面板
-- `src/SSHClient.App/MainWindow.xaml.cs` → 窗口事件桥接
-- `src/SSHClient.App/Logging/*.cs` → UI 滚动日志管线
-- `src/SSHClient.App/ViewModels/*.cs` → MVVM 逻辑（当前主用 Main/Profiles）
-- `src/SSHClient.App/Services/ProxyHost.cs` → 聚合代理启动/停止
-- `src/SSHClient.App/Services/IMainWindowActionService.cs` → 主窗口动作编排
-- `src/SSHClient.App/Services/ITrayBehaviorService.cs` → 托盘行为与最小化策略
-- `src/SSHClient.App/Services/IProfileFileDialogService.cs` → 文件对话框抽象
-- `src/SSHClient.App/Services/IProfileFileService.cs` → 配置文件导入导出
-- `src/SSHClient.App/Services/IRuleNormalizationService.cs` → 规则归一化
-- `src/SSHClient.Core/Services/ProxyManager.cs` → Profile & Tunnel 管理
-- `src/SSHClient.Core/Services/SshTunnelService.cs` → SSH 隧道（SSHNET/stub）
-- `src/SSHClient.Core/Proxy/*.cs` → HTTP/SOCKS proxy 实现 & RuleEngine
-- `src/SSHClient.Core/Proxy/UpstreamRouteConnector.cs` → HTTP/SOCKS 共用上游路由连接
-- `src/SSHClient.Core/Services/FileConfigService.cs` → appsettings JSON 持久化
+## 6. 关键运行流程（Runtime）
+
+### 6.1 启动流程
+1. 应用初始化宿主与依赖注入容器。
+2. 初始化日志体系与全局异常捕获。
+3. 读取配置并显示主窗口。
+
+关键点：
+- 配置采用统一优先级模型（用户配置优先，内置配置回退）。
+- 启动阶段异常必须可观测，避免静默失败。
+
+### 6.2 登录与代理开启流程
+1. 用户发起登录。
+2. 系统执行配置合法性检查并建立连接。
+3. 连接成功后启动本地混合代理监听。
+4. 后续流量按规则进入路由链。
+
+关键点：
+- 代理不是默认常驻启动，而是登录后按需启动。
+- 路由链与连接链解耦，避免 UI 直接承担网络复杂性。
+
+### 6.3 请求路由流程
+1. 流量进入单端口混合代理。
+2. 协议识别（HTTP/SOCKS）。
+3. 规则引擎返回动作。
+4. 执行动作：直连、通过 SSH 上游连接、或拒绝。
+
+请求时序图（登录后典型代理请求）：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as 本地应用流量
+    participant Mixed as Mixed Proxy
+    participant Rule as Rule Engine
+    participant Route as Upstream Route Connector
+    participant PM as Proxy Manager
+    participant SSH as SSH Connector
+    participant Target as 目标服务
+
+    Client->>Mixed: 发起请求(HTTP/SOCKS)
+    Mixed->>Mixed: 协议识别与基础校验
+    Mixed->>Rule: Match(host, port)
+    Rule-->>Mixed: 返回动作(Action)
+    Mixed->>Route: Connect(protocol, host, port)
+
+    alt 动作为 Direct
+        Route->>Target: 直接建立 TCP 连接
+        Target-->>Route: 连接成功
+        Route-->>Mixed: 返回上游连接
+        Mixed-->>Client: 双向转发(直连)
+    else 动作为 Proxy
+        Route->>PM: 获取并确保可用配置
+        PM-->>Route: 返回活动配置
+        Route->>SSH: 通过 SSH 建立上游连接
+        SSH->>Target: 建立目标连接
+        Target-->>SSH: 连接成功
+        SSH-->>Route: 返回上游连接
+        Route-->>Mixed: 返回上游连接
+        Mixed-->>Client: 双向转发(经 SSH)
+    else 动作为 Reject
+        Route-->>Mixed: 拒绝并返回错误
+        Mixed-->>Client: 返回拒绝响应/断开
+    end
+```
+
+关键点：
+- 存在兜底规则，避免“隐式默认行为”导致不可预期路由。
+- 防止代理自环（请求回到本地代理端点）。
+
+### 6.4 退出流程
+1. 触发有序停机。
+2. 停止后台代理与连接资源。
+3. 释放宿主资源并退出。
+
+关键点：
+- 采用确定性清理路径，避免退出过程异步放飞导致残留资源。
 
 ---
 
-📌 若设计有更新（例如启用 SSHNET、添加多平台/后台服务支持），请同步此文档并在 README 中链接。
+## 7. 配置与状态模型
+
+### 7.1 配置来源策略
+- 主配置：`%LOCALAPPDATA%/AlexSSHClient/appsettings.json`
+- 回退配置：应用目录中的 `appsettings.json`
+
+### 7.2 配置一致性原则
+- 运行时配置读取与宿主配置读取采用一致优先级。
+- 配置写入采用安全写入策略，降低异常中断导致的损坏风险。
+
+### 7.3 连接状态（概念）
+```text
+LoggedOut -> Connecting -> LoggedIn -> LoggingOut -> LoggedOut
+```
+
+状态切换要求：
+- 任意失败都必须回到可恢复状态。
+- UI 状态与真实连接状态保持一致，不允许“显示已连但实际未连”。
+
+---
+
+## 8. 并发与生命周期治理
+
+系统并发治理以“串行化关键生命周期操作”为核心：
+- 启停路径通过门控机制避免并发冲突。
+- 代理与连接清理遵循可取消、可等待、可回收原则。
+
+生命周期原则：
+- 启动、登录、代理启动、退出是四个一级生命周期事件。
+- 每个事件都应具备显式日志边界，便于问题追踪。
+
+---
+
+## 9. 可靠性设计要点
+
+当前可靠性设计聚焦以下策略：
+
+1. 防错输入处理：
+说明：对异常握手、无效配置等输入进行降级处理，避免后台任务失控。
+
+2. 路由兜底：
+说明：规则链包含最终兜底动作，减少未命中时的歧义行为。
+
+3. 有序停机：
+说明：退出流程优先完成资源清理，降低端口占用与状态残留。
+
+4. 可恢复失败：
+说明：连接失败与代理失败需保留后续重试能力，不进入不可恢复状态。
+
+---
+
+## 10. 可观测性设计
+
+可观测性分三层：
+- 结构化日志：用于开发与运维诊断。
+- UI 实时日志：用于用户可见反馈。
+- 启动探针日志：用于启动早期故障定位。
+
+设计目标：
+- 关键链路必须“有日志边界 + 有上下文字段 + 可定位阶段”。
+
+---
+
+## 11. 测试策略（架构视角）
+
+测试分层建议：
+
+1. 单元测试：
+覆盖规则判定、配置行为、连接与路由决策。
+
+2. 边界测试：
+覆盖协议异常输入、生命周期临界条件、配置损坏回退。
+
+3. 集成与压力测试：
+覆盖端到端代理链路、并发负载、长期稳定性。
+
+原则：
+- 先验证主链路正确性，再引入性能和耐久性门禁。
+
+---
+
+## 12. 扩展与演进指南
+
+新增能力时建议先回答四个问题：
+
+1. 新能力属于哪条主链路（配置/连接/路由/代理/可观测）？
+2. 会改变哪些状态转换和失败路径？
+3. 是否引入新的安全边界或资源生命周期？
+4. 需要新增哪些测试与日志字段来保证可运维？
+
+常见扩展方向：
+- 安全增强：身份校验、凭据保护、审计强化。
+- 路由增强：更丰富规则表达与策略组合。
+- 形态增强：桌面之外的服务化运行模式。
+
+---
+
+## 13. 已知风险与技术债（持续跟踪）
+
+需要持续关注的架构风险：
+- 规则复杂度提升后对性能与可解释性的影响。
+- 多平台演进时对系统代理能力差异的处理。
+- 安全能力增强时对易用性和兼容性的冲击。
+
+建议将风险转化为可执行事项：
+- 有指标、有验收条件、有回退方案。
+
+---
+
+## 14. 新开发者阅读路径
+
+建议按以下顺序建立认知：
+
+1. 先读本文件，建立全局模型。
+2. 再读 README，理解运行方式与基本操作。
+3. 再读重构计划，了解当前阶段与变更优先级。
+4. 最后进入代码与测试，定位具体实现。
+
+如果你要改动主链路，请先更新本文件中的“边界与流程”描述，再开始编码。
+
+---
+
+## 15. 文档维护约定
+
+以下变化必须同步更新本文件：
+- 分层边界变化。
+- 关键运行流程变化。
+- 配置优先级或生命周期模型变化。
+- 质量属性优先级变化。
+
+文档目标不是记录所有细节，而是持续维护“全局正确性”。

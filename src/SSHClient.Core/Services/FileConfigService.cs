@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Serilog;
 using SSHClient.Core.Configuration;
 
 namespace SSHClient.Core.Services;
@@ -7,48 +8,108 @@ public sealed class FileConfigService : IConfigService
 {
     private readonly string _configPath;
     private readonly string _legacyConfigPath;
+    private readonly ILogger _logger;
     private readonly JsonSerializerOptions _options = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
     };
 
-    public FileConfigService(string? configPath = null)
+    public FileConfigService(string? configPath = null, ILogger? logger = null)
     {
-        _legacyConfigPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
-        _configPath = configPath ?? Path.Combine(GetAppDataDirectory(), "appsettings.json");
+        _legacyConfigPath = AppConfigPaths.GetPackagedConfigPath();
+        _configPath = NormalizePathOrFallback(configPath, AppConfigPaths.GetUserConfigPath());
+        _logger = logger ?? Serilog.Log.Logger;
     }
 
     public async Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default)
     {
-        if (File.Exists(_configPath))
+        var userSettings = await TryLoadFromPathAsync(_configPath, "用户配置", cancellationToken);
+        if (userSettings is not null)
         {
-            await using var stream = File.OpenRead(_configPath);
-            var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, _options, cancellationToken)
-                           ?? new AppSettings();
-            return settings;
+            return userSettings;
         }
 
-        if (File.Exists(_legacyConfigPath))
+        if (!string.Equals(_legacyConfigPath, _configPath, StringComparison.OrdinalIgnoreCase))
         {
-            await using var stream = File.OpenRead(_legacyConfigPath);
-            var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, _options, cancellationToken)
-                           ?? new AppSettings();
-            return settings;
+            var packagedSettings = await TryLoadFromPathAsync(_legacyConfigPath, "内置配置", cancellationToken);
+            if (packagedSettings is not null)
+            {
+                return packagedSettings;
+            }
         }
 
+        _logger.Information("未找到可用配置文件，使用默认配置。用户路径 {UserPath}", _configPath);
         return new AppSettings();
     }
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_configPath)!);
-        await using var stream = File.Create(_configPath);
-        await JsonSerializer.SerializeAsync(stream, settings, _options, cancellationToken);
+        var configDirectory = Path.GetDirectoryName(_configPath);
+        if (string.IsNullOrWhiteSpace(configDirectory))
+        {
+            throw new InvalidOperationException($"配置文件路径无效：{_configPath}");
+        }
+
+        Directory.CreateDirectory(configDirectory);
+
+        var tempPath = _configPath + ".tmp";
+        try
+        {
+            await using (var stream = File.Create(tempPath))
+            {
+                await JsonSerializer.SerializeAsync(stream, settings, _options, cancellationToken);
+            }
+
+            File.Move(tempPath, _configPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
     }
 
-    private static string GetAppDataDirectory()
+    private async Task<AppSettings?> TryLoadFromPathAsync(string path, string sourceName, CancellationToken cancellationToken)
     {
-        var baseDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return Path.Combine(baseDir, "AlexSSHClient");
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            await using var stream = File.OpenRead(path);
+            var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, _options, cancellationToken)
+                ?? new AppSettings();
+            return settings;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            _logger.Warning(ex, "读取{SourceName}失败，路径 {Path}，将尝试下一个来源", sourceName, path);
+            return null;
+        }
+    }
+
+    private static string NormalizePathOrFallback(string? path, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return fallback;
+        }
+
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch
+        {
+            return fallback;
+        }
     }
 }

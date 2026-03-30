@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using SSHClient.Core.Models;
 
@@ -8,9 +7,7 @@ namespace SSHClient.Core.Proxy;
 public enum RuleMatchType
 {
     DomainSuffix,
-    DomainKeyword,
     IpCidr,
-    ProcessName,
     Port,
     All
 }
@@ -28,124 +25,182 @@ public sealed record ProxyRuleEx
 
 public interface IRuleEngine
 {
-    ProxyRuleEx? Match(string host, int port, string? processName = null, IPAddress? destIp = null);
+    ProxyRuleEx? Match(string host, int port, IPAddress? destIp = null);
 }
 
 public sealed class RuleEngine : IRuleEngine
 {
-    private readonly IList<ProxyRuleEx> _rules;
+    private readonly List<CompiledRule> _compiledRules;
 
     public RuleEngine(IEnumerable<ProxyRuleEx> rules)
     {
-        _rules = rules.ToList();
+        _compiledRules = BuildCompiledRules(rules);
     }
 
-    public ProxyRuleEx? Match(string host, int port, string? processName = null, IPAddress? destIp = null)
+    public ProxyRuleEx? Match(string host, int port, IPAddress? destIp = null)
     {
-        foreach (var rule in _rules)
+        var normalizedHost = NormalizeHost(host);
+        IPAddress? parsedHostIp = null;
+        if (!string.IsNullOrEmpty(normalizedHost) && IPAddress.TryParse(normalizedHost, out var hostIp))
         {
-            if (IsMatch(rule, host, port, processName, destIp))
+            parsedHostIp = hostIp;
+        }
+
+        var ctx = new MatchContext(
+            NormalizedHost: normalizedHost,
+            Port: port,
+            DestIp: destIp,
+            ParsedHostIp: parsedHostIp);
+
+        foreach (var compiledRule in _compiledRules)
+        {
+            if (compiledRule.IsMatch(ctx))
             {
-                return rule;
+                return compiledRule.Rule;
             }
         }
 
         return null;
     }
 
-    private static bool IsMatch(ProxyRuleEx rule, string host, int port, string? processName, IPAddress? destIp)
+    private static List<CompiledRule> BuildCompiledRules(IEnumerable<ProxyRuleEx> rules)
     {
-        switch (rule.Type)
+        var compiled = new List<CompiledRule>();
+        foreach (var rule in rules)
         {
-            case RuleMatchType.All:
-                return true;
-            case RuleMatchType.Port:
-                return rule.Port == port;
-            case RuleMatchType.ProcessName:
-                return processName is not null && rule.Pattern.Equals(processName, StringComparison.OrdinalIgnoreCase);
-            case RuleMatchType.DomainSuffix:
-                return IsDomainMatch(rule, host);
-            case RuleMatchType.DomainKeyword:
-                return IsDomainMatch(rule, host);
-            case RuleMatchType.IpCidr:
-                var targetIp = destIp;
-                if (targetIp is null && IPAddress.TryParse(host, out var parsedIp))
-                {
-                    targetIp = parsedIp;
-                }
+            compiled.Add(new CompiledRule(rule, BuildMatcher(rule)));
 
-                if (targetIp is null)
-                {
-                    return false;
-                }
-
-                return CheckCidr(targetIp, rule.Pattern ?? rule.Cidr ?? string.Empty);
-            default:
-                return false;
+            // RuleAction-independent short-circuit: first All rule matches any request,
+            // so all subsequent rules are unreachable under first-match semantics.
+            if (rule.Type == RuleMatchType.All)
+            {
+                break;
+            }
         }
+
+        return compiled;
     }
 
-    private static bool IsDomainMatch(ProxyRuleEx rule, string host)
+    private static Func<MatchContext, bool> BuildMatcher(ProxyRuleEx rule)
     {
-        if (string.IsNullOrWhiteSpace(host))
+        return rule.Type switch
         {
-            return false;
+            RuleMatchType.All => _ => true,
+            RuleMatchType.Port => BuildPortMatcher(rule),
+            RuleMatchType.DomainSuffix => BuildDomainMatcher(rule.Pattern),
+            RuleMatchType.IpCidr => BuildIpCidrMatcher(rule),
+            _ => _ => false,
+        };
+    }
+
+    private static Func<MatchContext, bool> BuildPortMatcher(ProxyRuleEx rule)
+    {
+        var targetPort = rule.Port;
+        if (!targetPort.HasValue && int.TryParse(rule.Pattern, out var parsedPort))
+        {
+            targetPort = parsedPort;
         }
 
-        var normalizedHost = host.Trim().TrimEnd('.');
-        if (normalizedHost.Length == 0)
+        if (!targetPort.HasValue)
         {
-            return false;
+            return _ => false;
         }
 
-        var patterns = SplitDomainPatterns(rule.Pattern);
+        return ctx => ctx.Port == targetPort.Value;
+    }
+
+    private static Func<MatchContext, bool> BuildIpCidrMatcher(ProxyRuleEx rule)
+    {
+        var cidr = string.IsNullOrWhiteSpace(rule.Pattern) ? rule.Cidr : rule.Pattern;
+        if (!TryBuildCidrMatcher(cidr ?? string.Empty, out var matcher))
+        {
+            return _ => false;
+        }
+
+        return ctx =>
+        {
+            var targetIp = ctx.DestIp ?? ctx.ParsedHostIp;
+            return targetIp is not null && matcher.IsMatch(targetIp);
+        };
+    }
+
+    private static Func<MatchContext, bool> BuildDomainMatcher(string? pattern)
+    {
+        var patterns = SplitDomainPatterns(pattern);
         if (patterns.Count == 0)
         {
-            return false;
+            return _ => false;
         }
 
-        foreach (var pattern in patterns)
+        var compiledPatternMatchers = new List<Func<string, bool>>();
+        foreach (var p in patterns)
         {
-            if (pattern == "*")
+            if (p == "*")
             {
-                return true;
-            }
-
-            // Treat leading wildcard as both root and subdomain match for better UX.
-            if (pattern.StartsWith("*.", StringComparison.Ordinal))
-            {
-                var baseDomain = pattern[2..];
-                if (normalizedHost.Equals(baseDomain, StringComparison.OrdinalIgnoreCase)
-                    || normalizedHost.EndsWith('.' + baseDomain, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-
-            if (pattern.Contains('*'))
-            {
-                var regexPattern = "^" + Regex.Escape(pattern).Replace("\\*", ".*") + "$";
-                if (Regex.IsMatch(normalizedHost, regexPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
-                {
-                    return true;
-                }
-
+                compiledPatternMatchers.Add(_ => true);
                 continue;
             }
 
-            if (rule.Type == RuleMatchType.DomainKeyword && normalizedHost.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+            if (p.StartsWith("*.", StringComparison.Ordinal))
             {
-                return true;
+                var baseDomain = p[2..];
+                if (baseDomain.Length == 0)
+                {
+                    continue;
+                }
+
+                compiledPatternMatchers.Add(host =>
+                    host.Equals(baseDomain, StringComparison.OrdinalIgnoreCase)
+                    || host.EndsWith('.' + baseDomain, StringComparison.OrdinalIgnoreCase));
+                continue;
             }
 
-            if (normalizedHost.Equals(pattern, StringComparison.OrdinalIgnoreCase)
-                || normalizedHost.EndsWith('.' + pattern, StringComparison.OrdinalIgnoreCase))
+            if (p.Contains('*'))
             {
-                return true;
+                var regex = new Regex(
+                    "^" + Regex.Escape(p).Replace("\\*", ".*") + "$",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+                compiledPatternMatchers.Add(host => regex.IsMatch(host));
+                continue;
             }
+
+            compiledPatternMatchers.Add(host =>
+                host.Equals(p, StringComparison.OrdinalIgnoreCase)
+                || host.EndsWith('.' + p, StringComparison.OrdinalIgnoreCase));
         }
 
-        return false;
+        if (compiledPatternMatchers.Count == 0)
+        {
+            return _ => false;
+        }
+
+        return ctx =>
+        {
+            if (string.IsNullOrEmpty(ctx.NormalizedHost))
+            {
+                return false;
+            }
+
+            foreach (var matchPattern in compiledPatternMatchers)
+            {
+                if (matchPattern(ctx.NormalizedHost))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+    }
+
+    private static string NormalizeHost(string? host)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            return string.Empty;
+        }
+
+        return host.Trim().TrimEnd('.');
     }
 
     private static List<string> SplitDomainPatterns(string? pattern)
@@ -162,26 +217,73 @@ public sealed class RuleEngine : IRuleEngine
             .ToList();
     }
 
-    private static bool CheckCidr(IPAddress ip, string cidr)
+    private static bool TryBuildCidrMatcher(string cidr, out CidrMatcher matcher)
     {
-        // simple IPv4 CIDR check
+        matcher = default;
+
         var parts = cidr.Split('/');
-        if (parts.Length != 2) return false;
-        if (!IPAddress.TryParse(parts[0], out var network)) return false;
-        if (!int.TryParse(parts[1], out var prefix)) return false;
-        var ipBytes = ip.GetAddressBytes();
-        var netBytes = network.GetAddressBytes();
-        if (ipBytes.Length != netBytes.Length) return false;
-
-        int bytes = prefix / 8;
-        int bits = prefix % 8;
-
-        for (int i = 0; i < bytes; i++)
+        if (parts.Length != 2)
         {
-            if (ipBytes[i] != netBytes[i]) return false;
+            return false;
         }
-        if (bits == 0) return true;
-        int mask = (byte)~(0xFF >> bits);
-        return (ipBytes[bytes] & mask) == (netBytes[bytes] & mask);
+
+        if (!IPAddress.TryParse(parts[0], out var network))
+        {
+            return false;
+        }
+
+        if (!int.TryParse(parts[1], out var prefixLength))
+        {
+            return false;
+        }
+
+        var networkBytes = network.GetAddressBytes();
+        var maxPrefix = networkBytes.Length * 8;
+        if (prefixLength < 0 || prefixLength > maxPrefix)
+        {
+            return false;
+        }
+
+        matcher = new CidrMatcher(networkBytes, prefixLength);
+        return true;
+    }
+
+    private readonly record struct MatchContext(
+        string NormalizedHost,
+        int Port,
+        IPAddress? DestIp,
+        IPAddress? ParsedHostIp);
+
+    private sealed record CompiledRule(ProxyRuleEx Rule, Func<MatchContext, bool> IsMatch);
+
+    private readonly record struct CidrMatcher(byte[] NetworkBytes, int PrefixLength)
+    {
+        public bool IsMatch(IPAddress ip)
+        {
+            var ipBytes = ip.GetAddressBytes();
+            if (ipBytes.Length != NetworkBytes.Length)
+            {
+                return false;
+            }
+
+            var fullBytes = PrefixLength / 8;
+            var remainingBits = PrefixLength % 8;
+
+            for (var i = 0; i < fullBytes; i++)
+            {
+                if (ipBytes[i] != NetworkBytes[i])
+                {
+                    return false;
+                }
+            }
+
+            if (remainingBits == 0)
+            {
+                return true;
+            }
+
+            var mask = (byte)~(0xFF >> remainingBits);
+            return (ipBytes[fullBytes] & mask) == (NetworkBytes[fullBytes] & mask);
+        }
     }
 }
