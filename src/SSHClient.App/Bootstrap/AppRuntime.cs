@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using System.Windows;
 using Serilog;
 using SSHClient.App.Services;
+using WpfApplication = System.Windows.Application;
 
 namespace SSHClient.App.Bootstrap;
 
@@ -12,14 +13,14 @@ public static class AppRuntime
         var mainWindow = services.GetRequiredService<MainWindow>();
         mainWindow.DataContext = services.GetRequiredService<ViewModels.MainViewModel>();
 
-        if (Application.Current is not null)
+        if (WpfApplication.Current is not null)
         {
-            Application.Current.MainWindow = mainWindow;
+            WpfApplication.Current.MainWindow = mainWindow;
             mainWindow.Closed += (_, __) =>
             {
                 StartupProbe.Log("主窗口关闭事件已触发");
 
-                if (Application.Current is { } app)
+                if (WpfApplication.Current is { } app)
                 {
                     app.Shutdown();
                 }

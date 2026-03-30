@@ -2,13 +2,14 @@ using System.Windows;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 using SSHClient.App.Bootstrap;
+using WpfApplication = System.Windows.Application;
 
 namespace SSHClient.App;
 
 /// <summary>
 /// Application bootstrapper with a DI host. Supports a "--minimal" fallback for smoke testing.
 /// </summary>
-public partial class App : Application
+public partial class App : WpfApplication
 {
     private IHost? _host;
 

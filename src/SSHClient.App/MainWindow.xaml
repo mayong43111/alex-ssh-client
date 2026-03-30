@@ -7,6 +7,7 @@
         xmlns:converters="clr-namespace:SSHClient.App.Converters"
         mc:Ignorable="d"
         Title="SSH 客户端"
+        Icon="Assets/app.ico"
         Width="600"
         Height="600"
         MinWidth="600"
@@ -105,10 +106,35 @@
 
         <!-- 上：当前 profile + 小图标切换（透明背景） -->
         <Border Grid.Row="0" Background="Transparent" BorderThickness="0" Padding="0,0,0,1">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock Text="当前配置：" FontWeight="SemiBold" Margin="0,0,8,0"/>
-                <TextBlock Text="{Binding ProfilesVM.SelectedProfile.Name, TargetNullValue=默认}" FontWeight="Bold" Foreground="#1D4ED8"/>
-            </StackPanel>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                    <TextBlock Text="当前配置：" FontWeight="SemiBold" Margin="0,0,8,0"/>
+                    <TextBlock Text="{Binding ProfilesVM.SelectedProfile.Name, TargetNullValue=默认}" FontWeight="Bold" Foreground="#1D4ED8"/>
+                </StackPanel>
+
+                <Button Grid.Column="1"
+                        Name="MinimizeBehaviorButton"
+                        Width="28"
+                        Height="24"
+                        Margin="0,0,0,0"
+                        Padding="0"
+                        ToolTip="最小化行为"
+                        Style="{StaticResource SecondaryButton}"
+                        Click="MinimizeBehaviorButton_Click">
+                    <Button.ContextMenu>
+                        <ContextMenu Name="MinimizeBehaviorContextMenu">
+                            <MenuItem Name="TaskbarMinimizeMenuItem" Header="仅最小化" Click="TaskbarMinimizeMenuItem_Click"/>
+                            <MenuItem Name="TrayMinimizeMenuItem" Header="最小化到托盘" Click="TrayMinimizeMenuItem_Click"/>
+                        </ContextMenu>
+                    </Button.ContextMenu>
+                    <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE712;" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Button>
+            </Grid>
         </Border>
 
         <!-- 中：Tab + Action Buttons -->
@@ -375,7 +401,8 @@
                                 <StackPanel>
                                     <TextBlock Text="快速说明" FontWeight="SemiBold"/>
                                     <TextBlock Text="- 使用 保存 持久化当前配置" Margin="0,4,0,0"/>
-                                    <TextBlock Text="- 使用 读取 从配置文件重新加载" Margin="0,2,0,0"/>
+                                    <TextBlock Text="- 使用 另存为 导出当前配置文件" Margin="0,2,0,0"/>
+                                    <TextBlock Text="- 使用 读取 可从任意目录加载配置文件" Margin="0,2,0,0"/>
                                     <TextBlock Text="- 日志面板支持文本选择与复制" Margin="0,2,0,0"/>
                                 </StackPanel>
                             </Border>
@@ -384,7 +411,7 @@
                 </TabControl>
 
                 <!-- 中底：Action 按钮 -->
-                <UniformGrid Grid.Row="1" Margin="0,8,0,0" Columns="4" HorizontalAlignment="Stretch">
+                <UniformGrid Grid.Row="1" Margin="0,8,0,0" Columns="5" HorizontalAlignment="Stretch">
                     <Button Content="{Binding ProfilesVM.ConnectButtonText}"
                         Width="90"
                         Tag="{Binding ProfilesVM.ConnectButtonText}"
@@ -394,9 +421,13 @@
                         Width="90"
                         Command="{Binding ProfilesVM.SaveProfileCommand}"
                         Style="{StaticResource SecondaryButton}"/>
+                    <Button Content="另存为"
+                        Width="90"
+                        Style="{StaticResource SecondaryButton}"
+                        Click="SaveAsButton_Click"/>
                     <Button Content="读取"
                         Width="90"
-                        Command="{Binding ProfilesVM.RefreshCommand}"
+                        Click="LoadFromFileButton_Click"
                         Style="{StaticResource SecondaryButton}"/>
                     <Button Content="退出"
                         Width="90"

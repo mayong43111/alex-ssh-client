@@ -8,6 +8,13 @@ public sealed class AppSettings
 
     public IList<ProxyProfile> Profiles { get; set; } = new List<ProxyProfile>();
 
+    public string? ActiveProfileName { get; set; }
+
+    public string? ActiveProfileFilePath { get; set; }
+
+    // null: 首次最小化时询问；false: 仅最小化到任务栏；true: 最小化到托盘
+    public bool? MinimizeToTray { get; set; }
+
     public ProxyListenerSettings Proxy { get; set; } = new();
     public LoggingSettings Logging { get; set; } = new();
 }

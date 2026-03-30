@@ -1,11 +1,12 @@
 using System.Windows;
 using Serilog;
+using WpfApplication = System.Windows.Application;
 
 namespace SSHClient.App.Bootstrap;
 
 public static class GlobalExceptionHooks
 {
-    public static void Register(Application application)
+    public static void Register(WpfApplication application)
     {
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
         {
