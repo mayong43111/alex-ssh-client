@@ -1,38 +1,49 @@
-# SSH Client (Shadowrocket for Windows-inspired)
+# SSH Client
 
-A minimal .NET 8 WPF desktop client scaffold inspired by **Shadowrocket for Windows** but focused on **SSH-based SOCKS/HTTP proxying**. Includes MVVM structure, DI, Serilog logging, configuration via `appsettings.json`, and stub SSH tunneling logic using `Renci.SshNet`.
+一个独立实现的 Windows 桌面 SSH 代理客户端（.NET 8 + WPF）。
 
-## ✨ Features (MVP scaffolding)
-- WPF UI shell with tabs: **Dashboard**, **Profiles**, **Rules**, **Connections**.
-- MVVM via `CommunityToolkit.Mvvm` (source generators for observables & commands).
-- Configuration service (`FileConfigService`) loading/saving `appsettings.json`.
-- Stub SSH tunnel service (`SshTunnelService`) using `Renci.SshNet` with dynamic (SOCKS) forwarding.
-- Proxy manager orchestrating multiple tunnels.
-- Logging via **Serilog** (console + rolling file).
-- xUnit tests with **FluentAssertions**.
-- GitHub Actions CI workflow (restore/build/test).
+本项目聚焦于“通过 SSH 建立上游链路，并在本机提供 HTTP/SOCKS 代理入口 + 规则路由能力”，并不是基于 Shadowrocket 或其衍生实现。
 
-## 🛠️ Prerequisites
+## 主要能力
+- WPF 客户端 + MVVM（CommunityToolkit.Mvvm）
+- Profile 管理（保存、另存为、读取）
+- 登录后启动本地代理监听：
+  - HTTP: `127.0.0.1:8888`
+  - SOCKS5: `127.0.0.1:1080`
+- 规则路由（Profile 级规则，支持 DomainSuffix/IpCidr/All）
+- 规则编辑弹窗与列表双击编辑（默认项不允许在弹窗中编辑，且不可删除）
+- 托盘最小化行为（首次询问 + 持久化偏好）
+- 结构化日志（Serilog，UI 实时日志 + 文件日志）
+- 测试与 CI（xUnit + GitHub Actions）
+
+## 运行环境
+- Windows 10/11
 - .NET SDK 8.0+
-- Windows 10/11 (WPF); core library is cross-platform.
 
-## 🚀 Build & Run
+## 快速开始
 ```bash
-# Restore & build
- dotnet restore
- dotnet build
-
-# Run WPF app
- dotnet run --project src/SSHClient.App
-
-# Run tests
- dotnet test
+dotnet restore
+dotnet build
+dotnet run --project src/SSHClient.App
+dotnet test
 ```
 
-> 🧪 **Verification-before-completion:** Always run `dotnet test` and check exit codes before claiming success.
+诊断运行（建议排查时使用）：
+```bash
+dotnet run --project src/SSHClient.App -- --diag
+```
 
-## 🧩 Configuration
-`src/SSHClient.App/appsettings.json` sample:
+## 配置说明
+配置文件：`src/SSHClient.App/appsettings.json`
+
+当前结构要点：
+- 规则是 **Profile 内部字段**（`Profiles[i].Rules`）
+- 应用状态会持久化：
+  - `ActiveProfileName`
+  - `ActiveProfileFilePath`
+  - `MinimizeToTray`
+
+示例：
 ```json
 {
   "SSHClient": {
@@ -40,67 +51,86 @@ A minimal .NET 8 WPF desktop client scaffold inspired by **Shadowrocket for Wind
       "MinimumLevel": "Information",
       "LogPath": "logs/sshclient-.log"
     },
+    "Proxy": {
+      "HttpPort": 8888,
+      "SocksPort": 1080,
+      "EnableOnStartup": true,
+      "ToggleSystemProxy": false
+    },
     "Profiles": [
       {
         "Name": "SampleSSH",
         "Host": "your-ssh-host.example.com",
         "Port": 22,
         "Username": "alice",
+        "Password": null,
         "PrivateKeyPath": "C:/Users/alice/.ssh/id_rsa",
+        "PrivateKeyPassphrase": null,
         "AuthMethod": "PrivateKey",
+        "LocalListenAddress": "127.0.0.1",
         "LocalSocksPort": 1080,
-        "StrictHostKeyChecking": true
+        "JumpHosts": [],
+        "StrictHostKeyChecking": true,
+        "Rules": [
+          {
+            "Name": "默认",
+            "Priority": 9999,
+            "Pattern": "*",
+            "Type": "All",
+            "Action": "Direct"
+          }
+        ]
       }
     ],
-    "Rules": [
-      {
-        "Name": "Default",
-        "Pattern": "*",
-        "Action": "Proxy",
-        "Profile": "SampleSSH"
-      }
-    ]
+    "ActiveProfileName": "SampleSSH",
+    "ActiveProfileFilePath": null,
+    "MinimizeToTray": null
   }
 }
 ```
 
-### Notes
-- **真实 SSH 转发**：默认使用 stub（无依赖）。要启用 SSH.NET：
-  1) `dotnet add src/SSHClient.Core package Renci.SshNet`
-  2) 在 `Directory.Build.props` 中把 `<DefineConstants>SSHNET_STUB</DefineConstants>` 改为 `<DefineConstants>SSHNET;HAS_RENCI</DefineConstants>`
-  3) `dotnet build`
-  - 启用后：`SshTunnelService` 会启动 `ForwardedPortDynamic`（本地 SOCKS）并可创建针对目标的 `ForwardedPortLocal`；`SshProxyConnector` 会经 SSH 连接目标。
-- 想要 **特定软件使用代理**（非全局）：
-  - HTTP 代理：`HTTP_PROXY=http://127.0.0.1:8888`，`HTTPS_PROXY=http://127.0.0.1:8888`
-  - SOCKS5：`ALL_PROXY=socks5://127.0.0.1:1080`
-  - 示例：`curl -x http://127.0.0.1:8888 https://example.com` 或 `curl --socks5 127.0.0.1:1080 https://example.com`
-  - 浏览器/IDE/包管理器通常有独立代理设置，可填写上面的地址；无需启用系统全局代理。
-- `ProxyManager` 使用 `Func<ISshTunnelService>` 工厂 + `IProxyConnector`，可替换为 `gost`、`sing-box` 等其他引擎。
+## 代理使用说明
+- HTTP 代理地址：`http://127.0.0.1:8888`
+- SOCKS5 代理地址：`socks5://127.0.0.1:1080`
 
-## 📁 Project Structure
+常见误用：
+- 不要把 `http://127.0.0.1:1080` 当作 HTTP 代理使用。
+- `1080` 是 SOCKS5 端口，如果收到日志“首字节 67 (C)”，通常是 HTTP CONNECT 请求发到了 SOCKS 端口。
+
+命令行示例：
+```bash
+curl -x http://127.0.0.1:8888 https://example.com
+curl --socks5 127.0.0.1:1080 https://example.com
 ```
+
+Git 通过本地 SOCKS5 代理：
+```bash
+git config --local http.proxy socks5h://127.0.0.1:1080
+git config --local https.proxy socks5h://127.0.0.1:1080
+```
+
+## 规则行为说明
+- 域名规则支持多条输入（`;` 或换行分隔）
+- 通配规则 `*.example.com` 可匹配 `example.com` 和其子域
+- 运行时总会追加最终兜底规则 `All/* -> Direct`，避免无命中时隐式走代理
+
+## 项目结构
+```text
 SSHClient.sln
 ├─ src
-│  ├─ SSHClient.App          # WPF app
-│  └─ SSHClient.Core         # Core services & models
+│  ├─ SSHClient.App
+│  └─ SSHClient.Core
 └─ tests
-   └─ SSHClient.Tests        # xUnit tests
+   └─ SSHClient.Tests
 ```
 
-## 🔄 Next Steps / Ideas
-- Add host key verification UI and known_hosts management.
-- Implement rule engine (domain/CIDR/process match) and transparent proxy helpers.
-- Add secret storage (Windows Credential Manager) for passwords/passphrases.
-- Introduce background service for auto-reconnect, health checks.
-- Add UI for adding/editing profiles, import/export, and quick connect.
-- Optional: switch to Avalonia for cross-platform GUI.
+## 文档
+- 架构文档：`docs/ARCHITECTURE.md`
+- 重构记录：`docs/REFACTOR_PLAN.md`
 
-## 📦 CI/CD
-See `.github/workflows/ci.yml` — runs restore, build, test on Windows.
+## 安全建议
+- 优先使用公钥认证
+- 避免提交真实凭据到仓库
 
-## 🛡️ Security
-- Prefer **public key authentication**.
-- Avoid committing real `appsettings.json` secrets; use `appsettings.Development.json` locally and user secrets.
-
-## 🧾 License
-TBD — choose MIT/Apache-2.0 as needed.
+## 许可证
+MIT，见 `LICENSE`。

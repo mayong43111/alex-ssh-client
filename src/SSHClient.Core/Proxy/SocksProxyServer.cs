@@ -89,6 +89,11 @@ public sealed class SocksProxyServer : IAsyncDisposable
         var stream = client.GetStream();
         // Read auth methods
         int version = stream.ReadByte();
+        if (version < 0)
+        {
+            return;
+        }
+
         if (version == 0x04)
         {
             await HandleSocks4Async(stream, ct);
@@ -96,6 +101,16 @@ public sealed class SocksProxyServer : IAsyncDisposable
         }
         if (version != 0x05)
         {
+            if (IsLikelyHttpMethodInitial(version))
+            {
+                _logger.Warning(
+                    "SOCKS 端口收到疑似 HTTP 代理请求，首字节 {Version} ('{Ascii}')。请将该端口按 SOCKS5 代理配置。",
+                    version,
+                    (char)version);
+                await TrySendHttpProxyHintAsync(stream, ct);
+                return;
+            }
+
             _logger.Warning("不支持的 SOCKS 版本 {Version}", version);
             return;
         }
@@ -259,6 +274,30 @@ public sealed class SocksProxyServer : IAsyncDisposable
         var buffer = new byte[1];
         var read = await stream.ReadAsync(buffer, ct);
         return read == 0 ? -1 : buffer[0];
+    }
+
+    private static bool IsLikelyHttpMethodInitial(int value)
+    {
+        return value is (int)'G' // GET
+            or (int)'P'          // POST/PUT/PATCH
+            or (int)'C'          // CONNECT
+            or (int)'H'          // HEAD
+            or (int)'D'          // DELETE
+            or (int)'O'          // OPTIONS
+            or (int)'T';         // TRACE
+    }
+
+    private static async Task TrySendHttpProxyHintAsync(NetworkStream stream, CancellationToken ct)
+    {
+        const string response = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nThis endpoint is SOCKS5, not HTTP proxy.\r\n";
+        try
+        {
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(response), ct);
+        }
+        catch
+        {
+            // Ignore write failures for non-HTTP clients.
+        }
     }
 
     private static ValueTask SendSocks5Reply(NetworkStream stream, byte rep)
