@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using SSHClient.Core.Models;
 
 namespace SSHClient.Core.Configuration;
@@ -21,8 +22,21 @@ public sealed class AppSettings
 
 public sealed class ProxyListenerSettings
 {
-    public int HttpPort { get; set; } = 8888;
-    public int SocksPort { get; set; } = 1080;
+    public int ListenPort { get; set; } = 1080;
+
+    // Backward-compat: still accept historical key `socksPort` from existing config files.
+    [JsonPropertyName("socksPort")]
+    public int LegacySocksPort
+    {
+        set
+        {
+            if (value > 0)
+            {
+                ListenPort = value;
+            }
+        }
+    }
+
     public bool EnableOnStartup { get; set; } = true;
     public bool ToggleSystemProxy { get; set; } = false;
 }

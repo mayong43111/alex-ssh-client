@@ -8,7 +8,7 @@ namespace SSHClient.App.Services;
 /// </summary>
 public interface ISystemProxyService
 {
-    Task EnableAsync(string host, int httpPort, int socksPort, CancellationToken cancellationToken = default);
+    Task EnableAsync(string host, int port, CancellationToken cancellationToken = default);
     Task DisableAsync(CancellationToken cancellationToken = default);
 }
 
@@ -21,9 +21,9 @@ public sealed class SystemProxyService : ISystemProxyService
         _logger = logger ?? Serilog.Log.Logger;
     }
 
-    public async Task EnableAsync(string host, int httpPort, int socksPort, CancellationToken cancellationToken = default)
+    public async Task EnableAsync(string host, int port, CancellationToken cancellationToken = default)
     {
-        var proxyString = $"{host}:{httpPort}"; // WinINET doesn’t support SOCKS notation directly; use HTTP proxy here.
+        var proxyString = $"{host}:{port}"; // WinINET expects host:port; mixed listener accepts HTTP and SOCKS on one port.
         SetWinInetProxy(proxyString);
         await SetWinHttpProxy(proxyString, cancellationToken);
         _logger.Information("系统代理已启用：{Proxy}", proxyString);

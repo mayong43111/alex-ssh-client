@@ -139,8 +139,7 @@ c:\repos\SSH Client
       "LogPath": "logs/sshclient-.log"
     },
     "Proxy": {
-      "HttpPort": 8888,
-      "SocksPort": 1080,
+      "ListenPort": 1080,
       "EnableOnStartup": true,
       "ToggleSystemProxy": false
     },

@@ -16,6 +16,7 @@ public sealed class ProxyHost : IAsyncDisposable
     private readonly IConfigService _configService;
     private readonly IProxyManager _proxyManager;
     private readonly ISystemProxyService _systemProxyService;
+    private readonly ITrafficMonitor? _trafficMonitor;
     private readonly ILogger _logger;
 
     private MixedProxyServer? _mixed;
@@ -26,12 +27,14 @@ public sealed class ProxyHost : IAsyncDisposable
                      IProxyManager proxyManager,
                      IProxyConnector proxyConnector,
                      ISystemProxyService systemProxyService,
-                     ILogger? logger = null)
+                     ILogger? logger = null,
+                     ITrafficMonitor? trafficMonitor = null)
     {
         _configService = configService;
         _proxyManager = proxyManager;
         _proxyConnector = proxyConnector;
         _systemProxyService = systemProxyService;
+        _trafficMonitor = trafficMonitor;
         _logger = logger ?? Serilog.Log.Logger;
     }
 
@@ -63,14 +66,7 @@ public sealed class ProxyHost : IAsyncDisposable
             var runtimeRuleEngine = new RuleEngine(BuildRuntimeRules(activeProfile?.Rules ?? Array.Empty<ProxyRule>()));
             var routeProfileName = activeProfile?.Name;
 
-            var listenPort = proxySettings.SocksPort;
-            if (proxySettings.HttpPort != proxySettings.SocksPort)
-            {
-                _logger.Information(
-                    "已启用单端口 Mixed 模式，监听端口为 {Port}；HttpPort 配置 {HttpPort} 不用于单独监听",
-                    listenPort,
-                    proxySettings.HttpPort);
-            }
+            var listenPort = proxySettings.ListenPort;
 
             var mixed = new MixedProxyServer(
                 runtimeRuleEngine,
@@ -79,14 +75,15 @@ public sealed class ProxyHost : IAsyncDisposable
                 listenPort,
                 _logger,
                 routeProfileName: routeProfileName,
-                routeProfile: activeProfile);
+                routeProfile: activeProfile,
+                trafficMonitor: _trafficMonitor);
 
             _mixed = mixed;
             _mixed.Start();
 
             if (proxySettings.ToggleSystemProxy)
             {
-                await _systemProxyService.EnableAsync("127.0.0.1", listenPort, listenPort, cancellationToken);
+                await _systemProxyService.EnableAsync("127.0.0.1", listenPort, cancellationToken);
             }
         }
         finally

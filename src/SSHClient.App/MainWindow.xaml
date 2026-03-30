@@ -5,6 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:coreModels="clr-namespace:SSHClient.Core.Models;assembly=SSHClient.Core"
         xmlns:converters="clr-namespace:SSHClient.App.Converters"
+        xmlns:controls="clr-namespace:SSHClient.App.Controls"
         mc:Ignorable="d"
         Title="SSH 客户端"
         Icon="Assets/app.ico"
@@ -18,6 +19,7 @@
     <Window.Resources>
         <converters:RuleActionDisplayConverter x:Key="RuleActionDisplayConverter"/>
         <converters:RuleTypeDisplayConverter x:Key="RuleTypeDisplayConverter"/>
+        <converters:StringToBrushConverter x:Key="StringToBrushConverter"/>
 
         <Style x:Key="PrimaryButton" TargetType="Button">
             <Setter Property="Height" Value="24"/>
@@ -277,7 +279,16 @@
                                              FontFamily="Consolas"
                                              TextWrapping="Wrap"
                                              VerticalScrollBarVisibility="Auto"
-                                             HorizontalScrollBarVisibility="Auto"/>
+                                             HorizontalScrollBarVisibility="Auto">
+                                        <TextBox.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="复制" Command="ApplicationCommands.Copy"/>
+                                                <MenuItem Header="全选" Command="ApplicationCommands.SelectAll"/>
+                                                <Separator/>
+                                                <MenuItem Header="清理日志" Command="{Binding ClearLogCommand}"/>
+                                            </ContextMenu>
+                                        </TextBox.ContextMenu>
+                                    </TextBox>
                                 </Grid>
                             </Border>
                         </Grid>
@@ -357,6 +368,84 @@
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="监控">
+                        <Grid Margin="4">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="130"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- 速率标签 -->
+                            <Grid Grid.Row="0" Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                    <Border Width="10" Height="10" Background="#22C55E" CornerRadius="2" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="上行" Foreground="#64748B" Margin="0,0,6,0"/>
+                                    <TextBlock Text="{Binding MonitorVM.CurrentUp}" FontWeight="SemiBold" Foreground="#22C55E"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <Border Width="10" Height="10" Background="#3B82F6" CornerRadius="2" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="下行" Foreground="#64748B" Margin="0,0,6,0"/>
+                                    <TextBlock Text="{Binding MonitorVM.CurrentDown}" FontWeight="SemiBold" Foreground="#3B82F6"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- 折线图 -->
+                            <controls:SparklineChart
+                                Grid.Row="1"
+                                UpSeries="{Binding MonitorVM.UpHistory}"
+                                DownSeries="{Binding MonitorVM.DownHistory}"
+                                UpColor="#22C55E"
+                                DownColor="#3B82F6"
+                                GridLineCount="4"/>
+
+                            <!-- 连接列表标题 -->
+                            <TextBlock Grid.Row="2" Text="连接详情" FontWeight="SemiBold" Margin="0,8,0,4"/>
+
+                            <!-- 连接列表 -->
+                            <DataGrid Grid.Row="3"
+                                      ItemsSource="{Binding MonitorVM.Connections}"
+                                      AutoGenerateColumns="False"
+                                      CanUserAddRows="False"
+                                      IsReadOnly="True"
+                                      HeadersVisibility="Column"
+                                      GridLinesVisibility="Horizontal"
+                                      RowHeaderWidth="0"
+                                      RowHeight="26"
+                                      BorderBrush="#D2D8E2"
+                                      BorderThickness="1">
+                                <DataGrid.CellStyle>
+                                    <Style TargetType="DataGridCell">
+                                        <Setter Property="Padding" Value="4,0"/>
+                                        <Setter Property="VerticalContentAlignment" Value="Center"/>
+                                        <Setter Property="BorderThickness" Value="0"/>
+                                    </Style>
+                                </DataGrid.CellStyle>
+                                <DataGrid.Columns>
+                                    <DataGridTemplateColumn Width="22" IsReadOnly="True">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Ellipse Width="8" Height="8"
+                                                         HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                         Fill="{Binding RouteColor, Converter={StaticResource StringToBrushConverter}}"
+                                                         ToolTip="{Binding RouteLabel}"/>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="地址" Width="*" Binding="{Binding HostPort}"/>
+                                    <DataGridTextColumn Header="连接时间" Width="70" Binding="{Binding ConnectedAt}"/>
+                                    <DataGridTextColumn Header="上行" Width="90" Binding="{Binding UpRate}"/>
+                                    <DataGridTextColumn Header="下行" Width="90" Binding="{Binding DownRate}"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </Grid>

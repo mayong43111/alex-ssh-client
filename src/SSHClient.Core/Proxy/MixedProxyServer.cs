@@ -20,6 +20,7 @@ public sealed class MixedProxyServer : IAsyncDisposable
     private readonly IRuleEngine _rules;
     private readonly IProxyManager _proxyManager;
     private readonly IProxyConnector _proxyConnector;
+    private readonly ITrafficMonitor? _trafficMonitor;
     private readonly int _port;
     private readonly string? _routeProfileName;
     private readonly ProxyProfile? _routeProfile;
@@ -33,7 +34,8 @@ public sealed class MixedProxyServer : IAsyncDisposable
         int port,
         ILogger? logger = null,
         string? routeProfileName = null,
-        ProxyProfile? routeProfile = null)
+        ProxyProfile? routeProfile = null,
+        ITrafficMonitor? trafficMonitor = null)
     {
         _rules = rules;
         _proxyManager = proxyManager;
@@ -41,6 +43,7 @@ public sealed class MixedProxyServer : IAsyncDisposable
         _port = port;
         _routeProfileName = routeProfileName;
         _routeProfile = routeProfile;
+        _trafficMonitor = trafficMonitor;
         _listener = new TcpListener(IPAddress.Loopback, port);
         _logger = logger ?? Serilog.Log.Logger;
     }
@@ -200,7 +203,8 @@ public sealed class MixedProxyServer : IAsyncDisposable
             await SendSocks5Reply(stream, 0x00);
 
             var remoteStream = remote.GetStream();
-            await BridgeStreamsAsync(stream, remoteStream, ct);
+            var routeAction = _rules.Match(host, port)?.Action ?? RuleAction.Proxy;
+            await BridgeTrackedAsync("SOCKS5", host, port, routeAction, stream, remoteStream, ct);
         }
         catch (Exception ex)
         {
@@ -253,7 +257,8 @@ public sealed class MixedProxyServer : IAsyncDisposable
 
             await SendSocks4Reply(stream, success: true, port, ipBytes, ct);
             var remoteStream = remote.GetStream();
-            await BridgeStreamsAsync(stream, remoteStream, ct);
+            var routeAction = _rules.Match(host, port)?.Action ?? RuleAction.Proxy;
+            await BridgeTrackedAsync("SOCKS4", host, port, routeAction, stream, remoteStream, ct);
         }
         catch (Exception ex)
         {
@@ -321,7 +326,8 @@ public sealed class MixedProxyServer : IAsyncDisposable
             {
                 var success = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection Established\r\nProxy-Agent: SSHClientProxy\r\n\r\n");
                 await stream.WriteAsync(success, ct);
-                await BridgeStreamsAsync(stream, remoteStream, ct);
+                var routeAction = _rules.Match(host, port)?.Action ?? RuleAction.Proxy;
+                await BridgeTrackedAsync($"HTTP[{method}]", host, port, routeAction, stream, remoteStream, ct);
                 return;
             }
 
@@ -529,6 +535,52 @@ public sealed class MixedProxyServer : IAsyncDisposable
         catch
         {
             // ignore
+        }
+    }
+
+    private async Task BridgeTrackedAsync(
+        string protocol, string host, int port, RuleAction routeAction,
+        NetworkStream clientStream, NetworkStream remoteStream,
+        CancellationToken ct)
+    {
+        if (_trafficMonitor is null)
+        {
+            await BridgeStreamsAsync(clientStream, remoteStream, ct);
+            return;
+        }
+
+        var connId = _trafficMonitor.RegisterConnection(protocol, host, port, routeAction);
+        try
+        {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var tunnelToken = linkedCts.Token;
+
+            // 用数组规避闭包捕获局部变量问题：[0]=upBytes [1]=downBytes
+            var counters = new long[2];
+
+            // client -> remote (上行)，用 CountingStream 包裹目标流
+            var countingRemote = new CountingStream(remoteStream, total =>
+            {
+                Interlocked.Exchange(ref counters[0], total);
+                _trafficMonitor.ReportBytes(connId, counters[0], Interlocked.Read(ref counters[1]));
+            });
+            // remote -> client (下行)
+            var countingClient = new CountingStream(clientStream, total =>
+            {
+                Interlocked.Exchange(ref counters[1], total);
+                _trafficMonitor.ReportBytes(connId, Interlocked.Read(ref counters[0]), counters[1]);
+            });
+
+            var uplink = PumpStreamAsync(clientStream, countingRemote, tunnelToken);
+            var downlink = PumpStreamAsync(remoteStream, countingClient, tunnelToken);
+
+            await Task.WhenAny(uplink, downlink);
+            linkedCts.Cancel();
+            await Task.WhenAll(uplink, downlink);
+        }
+        finally
+        {
+            _trafficMonitor.CompleteConnection(connId);
         }
     }
 

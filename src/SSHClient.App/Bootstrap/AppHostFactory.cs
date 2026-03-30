@@ -64,8 +64,10 @@ public static class AppHostFactory
                 services.AddSingleton<IProfileFileDialogService, ProfileFileDialogService>();
                 services.AddSingleton<IMainWindowActionService, MainWindowActionService>();
                 services.AddSingleton<IUiLogService>(uiLogService);
+                services.AddSingleton<ITrafficMonitor, TrafficMonitor>();
 
                 services.AddSingleton<ProfilesViewModel>();
+                services.AddSingleton<MonitorViewModel>();
                 services.AddSingleton<MainViewModel>();
                 services.AddSingleton<MainWindow>();
             })
