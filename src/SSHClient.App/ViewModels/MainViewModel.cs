@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using SSHClient.App.Logging;
+using System.Reflection;
 
 namespace SSHClient.App.ViewModels;
 
@@ -13,6 +14,8 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     private string _liveLog = string.Empty;
+
+    public string AppVersion { get; } = ResolveAppVersion();
 
     public MainViewModel(ProfilesViewModel profiles,
                          MonitorViewModel monitorVm,
@@ -39,5 +42,20 @@ public partial class MainViewModel : ObservableObject
         }
 
         _ = dispatcher.InvokeAsync(() => LiveLog = snapshot);
+    }
+
+    private static string ResolveAppVersion()
+    {
+        var assembly = typeof(MainViewModel).Assembly;
+        var infoVersion = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+
+        if (!string.IsNullOrWhiteSpace(infoVersion))
+        {
+            return infoVersion;
+        }
+
+        return "v.0.0.1";
     }
 }

@@ -485,14 +485,17 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
 
                                     <TextBlock Grid.Row="0" Grid.Column="0" Text="平台" FontWeight="SemiBold"/>
                                     <TextBlock Grid.Row="0" Grid.Column="1" Text="Windows"/>
-                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="传输" FontWeight="SemiBold"/>
-                                    <TextBlock Grid.Row="1" Grid.Column="1" Text="SSH 隧道 + 本地代理"/>
-                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="配置" FontWeight="SemiBold"/>
-                                    <TextBlock Grid.Row="2" Grid.Column="1" Text="配置与规则本地保存"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="版本" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding AppVersion}"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="传输" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="1" Text="SSH 隧道 + 本地代理"/>
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="配置" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Row="3" Grid.Column="1" Text="配置与规则本地保存"/>
                                 </Grid>
                             </Border>
 

@@ -20,6 +20,7 @@ public sealed class ProxyHost : IAsyncDisposable
     private readonly ILogger _logger;
 
     private MixedProxyServer? _mixed;
+    private bool _systemProxyManagedByHost;
 
     private readonly IProxyConnector _proxyConnector;
 
@@ -84,6 +85,11 @@ public sealed class ProxyHost : IAsyncDisposable
             if (proxySettings.ToggleSystemProxy)
             {
                 await _systemProxyService.EnableAsync("127.0.0.1", listenPort, cancellationToken);
+                _systemProxyManagedByHost = true;
+            }
+            else
+            {
+                _systemProxyManagedByHost = false;
             }
         }
         finally
@@ -109,15 +115,22 @@ public sealed class ProxyHost : IAsyncDisposable
                 await mixed.DisposeAsync();
             }
 
-            // Optionally disable system proxy on stop
-            try
+            // Only revert system proxy when it was enabled by this host.
+            if (_systemProxyManagedByHost)
             {
-                await _systemProxyService.DisableAsync(cancellationToken);
-            }
-            catch (OperationCanceledException) { /* ignorable */ }
-            catch (Exception ex)
-            {
-                _logger.Warning(ex, "关闭系统代理失败");
+                try
+                {
+                    await _systemProxyService.DisableAsync(cancellationToken);
+                }
+                catch (OperationCanceledException) { /* ignorable */ }
+                catch (Exception ex)
+                {
+                    _logger.Warning(ex, "关闭系统代理失败");
+                }
+                finally
+                {
+                    _systemProxyManagedByHost = false;
+                }
             }
         }
         finally

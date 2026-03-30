@@ -25,6 +25,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <AppBaseVersion>0.0.1</AppBaseVersion>
+    <AssemblyVersion>0.0.1.0</AssemblyVersion>
+    <FileVersion>0.0.1.0</FileVersion>
+    <Version>$(AppBaseVersion)</Version>
+    <BuildTimeCode>$([System.DateTime]::Now.ToString('yyyyMMddHHmmss'))</BuildTimeCode>
+    <InformationalVersion>v.$(AppBaseVersion)-$(BuildTimeCode)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <!-- Debug-friendly console window to see logs when running from terminal -->

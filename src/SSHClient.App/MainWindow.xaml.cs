@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.ComponentModel;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using SSHClient.App.Services;
 
 using SSHClient.App.ViewModels;
@@ -146,7 +147,14 @@ public partial class MainWindow : Window
         finally
         {
             _trayBehaviorService.Dispose();
-            Close();
+
+            // Schedule the actual close after the current Closing cycle completes,
+            // and detach handler to prevent re-entrancy.
+            _ = Dispatcher.BeginInvoke(() =>
+            {
+                Closing -= MainWindow_Closing;
+                Close();
+            }, DispatcherPriority.Background);
         }
     }
 
