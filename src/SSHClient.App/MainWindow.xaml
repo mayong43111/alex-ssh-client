@@ -414,6 +414,7 @@
 
                             <!-- 连接列表 -->
                             <DataGrid Grid.Row="3"
+                                      Name="MonitorConnectionsDataGrid"
                                       ItemsSource="{Binding MonitorVM.Connections}"
                                       AutoGenerateColumns="False"
                                       CanUserAddRows="False"
@@ -424,6 +425,13 @@
                                       RowHeight="26"
                                       BorderBrush="#D2D8E2"
                                       BorderThickness="1">
+                                <DataGrid.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="复制当前地址" Click="MonitorCopyAddressMenuItem_Click"/>
+                                        <Separator/>
+                                        <MenuItem Header="清空监控数据" Click="MonitorClearDataMenuItem_Click"/>
+                                    </ContextMenu>
+                                </DataGrid.ContextMenu>
                                 <DataGrid.CellStyle>
                                     <Style TargetType="DataGridCell">
                                         <Setter Property="Padding" Value="4,0"/>

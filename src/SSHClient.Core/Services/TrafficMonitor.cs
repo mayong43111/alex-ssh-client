@@ -47,6 +47,17 @@ public sealed class TrafficMonitor : ITrafficMonitor, IDisposable
         }
     }
 
+    public void Clear()
+    {
+        _entries.Clear();
+        lock (_historyLock)
+        {
+            _history.Clear();
+        }
+
+        Refreshed?.Invoke(this, EventArgs.Empty);
+    }
+
     public IReadOnlyList<ConnectionSnapshot> GetConnections()
     {
         var now = DateTime.Now;

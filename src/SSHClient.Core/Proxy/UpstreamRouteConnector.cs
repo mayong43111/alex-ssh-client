@@ -22,6 +22,13 @@ public static class UpstreamRouteConnector
         var rule = rules.Match(host, port);
         var action = rule?.Action ?? RuleAction.Proxy;
         var shouldProxy = action == RuleAction.Proxy;
+        var route = action switch
+        {
+            RuleAction.Proxy => "代理",
+            RuleAction.Direct => "直连",
+            RuleAction.Reject => "拒绝",
+            _ => "直连"
+        };
         var displayProfile = routeProfileName ?? "(当前配置)";
 
         logger.Information(
@@ -34,7 +41,12 @@ public static class UpstreamRouteConnector
             rule?.Pattern ?? "(无)",
             action,
             displayProfile,
-            shouldProxy ? "代理" : "直连");
+            route);
+
+        if (action == RuleAction.Reject)
+        {
+            throw new InvalidOperationException($"{protocol} 请求被规则拒绝: {host}:{port}");
+        }
 
         if (shouldProxy)
         {

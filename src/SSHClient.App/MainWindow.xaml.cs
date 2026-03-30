@@ -161,6 +161,31 @@ public partial class MainWindow : Window
         textBox.ScrollToEnd();
     }
 
+    private void MonitorCopyAddressMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (MonitorConnectionsDataGrid.SelectedItem is not ConnectionRowViewModel row)
+        {
+            return;
+        }
+
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        vm.MonitorVM.CopyAddressCommand.Execute(row.HostPort);
+    }
+
+    private void MonitorClearDataMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        vm.MonitorVM.ClearMonitorDataCommand.Execute(null);
+    }
+
     private static bool IsFromComboBox(DependencyObject? source)
     {
         var current = source;

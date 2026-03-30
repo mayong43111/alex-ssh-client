@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using System.Windows;
 using SSHClient.App.Models;
 using SSHClient.Core.Services;
 
@@ -77,6 +79,30 @@ public sealed partial class MonitorViewModel : ObservableObject
                 Connections.Add(new ConnectionRowViewModel(snap));
             }
         }
+    }
+
+    [RelayCommand]
+    private void CopyAddress(string? address)
+    {
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(address);
+        }
+        catch
+        {
+            // Ignore clipboard contention errors.
+        }
+    }
+
+    [RelayCommand]
+    private void ClearMonitorData()
+    {
+        _monitor.Clear();
     }
 
     private static void RebuildHistory(ObservableCollection<double> col,

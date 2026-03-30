@@ -185,6 +185,13 @@ public sealed class MixedProxyServer : IAsyncDisposable
             return;
         }
 
+        if (IsSelfProxyEndpoint(host, port))
+        {
+            _logger.Warning("阻止潜在代理回环：SOCKS5 请求目标为本地代理端点 {Host}:{Port}", host, port);
+            await SendSocks5Reply(stream, 0x02); // Connection not allowed by ruleset
+            return;
+        }
+
         TcpClient? remote = null;
         try
         {
@@ -236,6 +243,13 @@ public sealed class MixedProxyServer : IAsyncDisposable
 
         if (cmd != 0x01)
         {
+            await SendSocks4Reply(stream, success: false, port, ipBytes, ct);
+            return;
+        }
+
+        if (IsSelfProxyEndpoint(host, port))
+        {
+            _logger.Warning("阻止潜在代理回环：SOCKS4 请求目标为本地代理端点 {Host}:{Port}", host, port);
             await SendSocks4Reply(stream, success: false, port, ipBytes, ct);
             return;
         }
@@ -300,6 +314,13 @@ public sealed class MixedProxyServer : IAsyncDisposable
         {
             _logger.Warning("HTTP 请求无法解析目标：{RequestLine}", requestLine);
             await TrySendHttpBadRequestAsync(stream, ct);
+            return;
+        }
+
+        if (IsSelfProxyEndpoint(host, port))
+        {
+            _logger.Warning("阻止潜在代理回环：HTTP 请求目标为本地代理端点 {Host}:{Port}", host, port);
+            await TrySendHttpLoopDetectedAsync(stream, ct);
             return;
         }
 
@@ -536,6 +557,34 @@ public sealed class MixedProxyServer : IAsyncDisposable
         {
             // ignore
         }
+    }
+
+    private async Task TrySendHttpLoopDetectedAsync(NetworkStream stream, CancellationToken ct)
+    {
+        var response = "HTTP/1.1 508 Loop Detected\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBlocked proxy self-loop target: 127.0.0.1:" + _port + "\r\n";
+        try
+        {
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(response), ct);
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private bool IsSelfProxyEndpoint(string host, int port)
+    {
+        if (port != _port || string.IsNullOrWhiteSpace(host))
+        {
+            return false;
+        }
+
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return IPAddress.TryParse(host, out var ip) && IPAddress.IsLoopback(ip);
     }
 
     private async Task BridgeTrackedAsync(

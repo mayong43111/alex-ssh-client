@@ -44,6 +44,9 @@ public interface ITrafficMonitor
     /// <summary>标记连接已断开。</summary>
     void CompleteConnection(string connectionId);
 
+    /// <summary>清空监控连接和带宽历史。</summary>
+    void Clear();
+
     /// <summary>获取当前活跃连接快照列表（线程安全副本）。</summary>
     IReadOnlyList<ConnectionSnapshot> GetConnections();
 
