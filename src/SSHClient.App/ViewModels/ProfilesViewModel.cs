@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.Input;
 using Serilog;
 using SSHClient.Core.Models;
 using SSHClient.Core.Services;
+using System.Net;
 
 namespace SSHClient.App.ViewModels;
 
@@ -21,6 +22,8 @@ public partial class ProfilesViewModel : ObservableObject
     private readonly IMinimizePreferenceService _minimizePreferenceService;
     private readonly IProfileFileService _profileFileService;
     private readonly IRuleNormalizationService _ruleNormalizationService;
+    private readonly IAutoProxyScriptService _autoProxyScriptService;
+    private readonly ISystemProxyService _systemProxyService;
     private string? _activeProfileFilePath;
 
     public ObservableCollection<ProxyProfile> Profiles { get; } = new();
@@ -71,7 +74,9 @@ public partial class ProfilesViewModel : ObservableObject
         ProxyHost proxyHost,
         IMinimizePreferenceService minimizePreferenceService,
         IProfileFileService profileFileService,
-        IRuleNormalizationService ruleNormalizationService)
+        IRuleNormalizationService ruleNormalizationService,
+        IAutoProxyScriptService autoProxyScriptService,
+        ISystemProxyService systemProxyService)
     {
         _proxyManager = proxyManager;
         _configService = configService;
@@ -79,6 +84,8 @@ public partial class ProfilesViewModel : ObservableObject
         _minimizePreferenceService = minimizePreferenceService;
         _profileFileService = profileFileService;
         _ruleNormalizationService = ruleNormalizationService;
+        _autoProxyScriptService = autoProxyScriptService;
+        _systemProxyService = systemProxyService;
         _ = RefreshAsync();
     }
 
@@ -166,7 +173,10 @@ public partial class ProfilesViewModel : ObservableObject
         if (shouldPersistState)
         {
             await SaveAsync();
+            return;
         }
+
+        await RefreshPacScriptIfEnabledAsync();
     }
 
     public async Task<bool?> GetMinimizeToTrayPreferenceAsync()
@@ -561,6 +571,7 @@ public partial class ProfilesViewModel : ObservableObject
 
         await _configService.SaveAsync(settings);
         await PersistActiveProfileFileIfNeededAsync();
+        await RefreshPacScriptIfEnabledAsync();
 
         if (SelectedProfile is null)
         {
@@ -621,6 +632,42 @@ public partial class ProfilesViewModel : ObservableObject
         catch (Exception ex)
         {
             Log.Error(ex, "规则热更新失败：配置 {Profile}", activeProfileName);
+        }
+    }
+
+    private async Task RefreshPacScriptIfEnabledAsync()
+    {
+        var selectedProfile = SelectedProfile;
+        if (selectedProfile is null)
+        {
+            return;
+        }
+
+        var currentScriptUrl = _systemProxyService.GetCurrentAutoConfigScriptUrl();
+        if (string.IsNullOrWhiteSpace(currentScriptUrl)
+            || !Uri.TryCreate(currentScriptUrl, UriKind.Absolute, out var scriptUri)
+            || !string.Equals(scriptUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(scriptUri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(scriptUri.AbsolutePath, "/proxy.pac", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var settings = await _configService.LoadAsync();
+        var proxyPort = settings.Proxy.ListenPort;
+        if (proxyPort <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await _autoProxyScriptService.PublishAsync(scriptUri.Port, proxyPort, selectedProfile.Rules ?? Array.Empty<ProxyRule>());
+            Log.Information("规则保存后已自动刷新 PAC：{Url}", currentScriptUrl);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "规则保存后自动刷新 PAC 失败");
         }
     }
 

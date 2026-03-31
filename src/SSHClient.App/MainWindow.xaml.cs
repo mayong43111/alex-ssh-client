@@ -112,6 +112,36 @@ public partial class MainWindow : Window
         await _mainWindowActionService.HandleEditRuleAsync(this, vm);
     }
 
+    private async void SetSystemProxyButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        await _mainWindowActionService.HandleSetSystemProxyAsync(this, vm);
+    }
+
+    private async void PreviewPacButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        await _mainWindowActionService.HandlePreviewPacAsync(this, vm);
+    }
+
+    private async void RestoreSystemProxyButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        await _mainWindowActionService.HandleRestoreSystemProxyAsync(this, vm);
+    }
+
     private async void RulesDataGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (DataContext is not MainViewModel vm)

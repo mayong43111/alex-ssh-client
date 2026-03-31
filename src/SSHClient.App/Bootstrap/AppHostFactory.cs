@@ -66,6 +66,11 @@ public static class AppHostFactory
                 services.AddSingleton<IProxyManager, ProxyManager>();
                 services.AddSingleton<ProxyHost>();
                 services.AddSingleton<ISystemProxyService, SystemProxyService>();
+                services.AddSingleton<IPacScriptBuilder, PacScriptBuilder>();
+                services.AddSingleton<IPacHttpHost, PacHttpHost>();
+                services.AddSingleton<IAutoProxyScriptService, AutoProxyScriptService>();
+                services.AddSingleton<ISystemProxyApplicationService, SystemProxyApplicationService>();
+                services.AddSingleton<IPacPreviewService, PacPreviewService>();
                 services.AddSingleton<IMinimizePreferenceService, MinimizePreferenceService>();
                 services.AddSingleton<IProfileFileService, ProfileFileService>();
                 services.AddSingleton<IRuleNormalizationService, RuleNormalizationService>();

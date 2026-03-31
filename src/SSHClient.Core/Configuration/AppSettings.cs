@@ -23,6 +23,7 @@ public sealed class AppSettings
 public sealed class ProxyListenerSettings
 {
     public int ListenPort { get; set; } = 1080;
+    public int PacScriptPort { get; set; } = 18080;
 
     // Backward-compat: still accept historical key `socksPort` from existing config files.
     [JsonPropertyName("socksPort")]

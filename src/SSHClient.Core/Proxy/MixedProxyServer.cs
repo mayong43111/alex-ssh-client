@@ -371,6 +371,11 @@ public sealed class MixedProxyServer : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            if (IsExpectedShutdownException(ex, ct))
+            {
+                return;
+            }
+
             _logger.Warning(ex, "HTTP 代理连接 {Host}:{Port} 失败", host, port);
             await TrySendHttpBadGatewayAsync(stream, ct, isConnect);
         }
@@ -671,6 +676,13 @@ public sealed class MixedProxyServer : IAsyncDisposable
         var buffer = new byte[1];
         var read = await stream.ReadAsync(buffer, ct);
         return read == 0 ? -1 : buffer[0];
+    }
+
+    private static bool IsExpectedShutdownException(Exception ex, CancellationToken ct)
+    {
+        return ex is OperationCanceledException
+            || ex is ObjectDisposedException
+            || (ct.IsCancellationRequested && ex is IOException);
     }
 
     private async Task ObserveBackgroundTaskAsync(Task task, string context)

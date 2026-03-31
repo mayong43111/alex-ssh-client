@@ -303,24 +303,31 @@
                             </Grid.RowDefinitions>
 
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                <Button Content="新增规则"
-                                        Width="90"
+                                <Button Content="新增"
+                                        Width="60"
                                         Click="AddRuleButton_Click"
                                         Style="{StaticResource SecondaryButton}"/>
-                                <Button Content="编辑规则"
-                                    Width="90"
+                                <Button Content="编辑"
+                                    Width="60"
                                     Click="EditRuleButton_Click"
                                     Style="{StaticResource SecondaryButton}"/>
-                                <Button Content="删除规则"
-                                        Width="90"
+                                <Button Content="删除"
+                                        Width="60"
                                         Command="{Binding ProfilesVM.DeleteRuleCommand}"
                                         Style="{StaticResource SecondaryButton}"/>
+                                <Button Content="设置系统代理"
+                                    Width="110"
+                                    Click="SetSystemProxyButton_Click"
+                                    Style="{StaticResource SecondaryButton}"/>
+                                <Button Content="PAC 预览"
+                                    Width="90"
+                                    Click="PreviewPacButton_Click"
+                                    Style="{StaticResource SecondaryButton}"/>
+                                <Button Content="恢复系统代理"
+                                    Width="90"
+                                    Click="RestoreSystemProxyButton_Click"
+                                    Style="{StaticResource SecondaryButton}"/>
                             </StackPanel>
-
-                            <TextBlock Grid.Row="1"
-                                       Margin="2,0,0,8"
-                                       Foreground="#64748B"
-                                       Text="说明：新增/编辑规则通过弹窗录入；类型支持 全部/域名/IP 段。域名可输入多条（; 或换行分隔），IP 段使用 CIDR；选择全部时无需输入。列表中仅可修改动作。"/>
 
                             <DataGrid Grid.Row="2"
                                       Name="RulesDataGrid"

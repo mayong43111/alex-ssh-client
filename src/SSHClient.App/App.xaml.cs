@@ -12,6 +12,8 @@ namespace SSHClient.App;
 public partial class App : WpfApplication
 {
     private IHost? _host;
+    private static readonly TimeSpan ExitShutdownTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ExitDisposeTimeout = TimeSpan.FromSeconds(2);
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -86,9 +88,14 @@ public partial class App : WpfApplication
 
         try
         {
-            // Keep shutdown deterministic: wait for stop steps instead of fire-and-forget cleanup.
-            _host.StopAsync(TimeSpan.FromSeconds(1)).GetAwaiter().GetResult();
-            AppRuntime.StopBackgroundServicesAsync(_host.Services, TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
+            // Execute shutdown on a thread-pool thread to avoid UI sync-context deadlocks.
+            var shutdownTask = Task.Run(async () =>
+            {
+                await _host.StopAsync(TimeSpan.FromSeconds(1));
+                await AppRuntime.StopBackgroundServicesAsync(_host.Services, TimeSpan.FromSeconds(2));
+            });
+
+            WaitWithTimeout(shutdownTask, ExitShutdownTimeout, "应用退出清理超时，继续退出");
         }
         catch (Exception ex)
         {
@@ -96,10 +103,31 @@ public partial class App : WpfApplication
         }
         finally
         {
-            _host.Dispose();
+            try
+            {
+                var disposeTask = Task.Run(() => _host.Dispose());
+                WaitWithTimeout(disposeTask, ExitDisposeTimeout, "宿主释放超时，继续退出");
+            }
+            catch (Exception ex)
+            {
+                StartupProbe.Log($"宿主释放异常: {ex}");
+            }
+
             StartupProbe.Log("应用退出清理完成");
         }
 
         base.OnExit(e);
+    }
+
+    private static void WaitWithTimeout(Task task, TimeSpan timeout, string timeoutLog)
+    {
+        var completed = Task.WhenAny(task, Task.Delay(timeout)).GetAwaiter().GetResult();
+        if (!ReferenceEquals(completed, task))
+        {
+            StartupProbe.Log(timeoutLog);
+            return;
+        }
+
+        task.GetAwaiter().GetResult();
     }
 }
