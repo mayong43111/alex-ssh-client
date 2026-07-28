@@ -15,6 +15,8 @@ using System.Collections.Generic;
 public partial class ProfilesViewModel : ObservableObject
 {
     private const string DefaultProfileName = "Default";
+    private static readonly TimeSpan ReconnectInterval = TimeSpan.FromSeconds(15);
+    private const int ReconnectAttempts = 3;
 
     private readonly IProxyManager _proxyManager;
     private readonly IConfigService _configService;
@@ -25,6 +27,8 @@ public partial class ProfilesViewModel : ObservableObject
     private readonly IAutoProxyScriptService _autoProxyScriptService;
     private readonly ISystemProxyService _systemProxyService;
     private string? _activeProfileFilePath;
+    private CancellationTokenSource? _reconnectCts;
+    private readonly SemaphoreSlim _reconnectGate = new(1, 1);
 
     public ObservableCollection<ProxyProfile> Profiles { get; } = new();
     public ObservableCollection<ProxyRule> Rules { get; } = new();
@@ -44,7 +48,28 @@ public partial class ProfilesViewModel : ObservableObject
 
     partial void OnSelectedProfileChanged(ProxyProfile? value)
     {
+        SelectedAuthMethod = value?.AuthMethod ?? SshAuthMethod.PrivateKey;
         LoadRulesForSelectedProfile(value);
+    }
+
+    [ObservableProperty]
+    private SshAuthMethod _selectedAuthMethod;
+
+    partial void OnSelectedAuthMethodChanged(SshAuthMethod value)
+    {
+        if (SelectedProfile is null || SelectedProfile.AuthMethod == value)
+        {
+            return;
+        }
+
+        var updated = SelectedProfile with { AuthMethod = value };
+        var selectedIndex = Profiles.IndexOf(SelectedProfile);
+        if (selectedIndex >= 0)
+        {
+            Profiles[selectedIndex] = updated;
+        }
+
+        SelectedProfile = updated;
     }
 
     [ObservableProperty]
@@ -86,6 +111,7 @@ public partial class ProfilesViewModel : ObservableObject
         _ruleNormalizationService = ruleNormalizationService;
         _autoProxyScriptService = autoProxyScriptService;
         _systemProxyService = systemProxyService;
+        _proxyManager.ConnectionLost += OnProxyConnectionLost;
         _ = RefreshAsync();
     }
 
@@ -97,7 +123,7 @@ public partial class ProfilesViewModel : ObservableObject
             Host = "127.0.0.1",
             Username = "user",
             Port = 22,
-            LocalSocksPort = 1080,
+            LocalSocksPort = 10808,
             AuthMethod = SshAuthMethod.Password,
         };
     }
@@ -198,7 +224,7 @@ public partial class ProfilesViewModel : ObservableObject
             Host = "host",
             Username = "user",
             Port = 22,
-            LocalSocksPort = 1080,
+            LocalSocksPort = 10808,
             AuthMethod = SshAuthMethod.Password,
         };
         Profiles.Add(newProfile);
@@ -447,6 +473,8 @@ public partial class ProfilesViewModel : ObservableObject
             IsConnecting = true;
             await Task.Yield();
 
+            await SaveAsync();
+
             Log.Information("正在执行登录：配置 {Profile}", SelectedProfile.Name);
 
             var connected = await _proxyManager.ConnectAsync(SelectedProfile);
@@ -490,6 +518,7 @@ public partial class ProfilesViewModel : ObservableObject
     public async Task PrepareForAppExitAsync()
     {
         Log.Information("退出应用：准备停止代理并退出登录");
+        StopReconnect();
 
         if (IsConnecting)
         {
@@ -560,6 +589,11 @@ public partial class ProfilesViewModel : ObservableObject
         }
 
         var settings = await _configService.LoadAsync();
+        if (SelectedProfile?.LocalSocksPort is > 0 and <= 65535)
+        {
+            settings.Proxy.ListenPort = SelectedProfile.LocalSocksPort;
+        }
+
         settings.Profiles.Clear();
         foreach (var p in Profiles)
         {
@@ -690,6 +724,8 @@ public partial class ProfilesViewModel : ObservableObject
 
     private async Task LogoutAsync()
     {
+        StopReconnect();
+
         var profileName = ConnectedProfileName ?? SelectedProfile?.Name;
         if (string.IsNullOrWhiteSpace(profileName))
         {
@@ -717,6 +753,83 @@ public partial class ProfilesViewModel : ObservableObject
         finally
         {
             IsConnecting = false;
+        }
+    }
+
+    private void StopReconnect()
+    {
+        var reconnectCts = _reconnectCts;
+        _reconnectCts = null;
+        reconnectCts?.Cancel();
+    }
+
+    private void OnProxyConnectionLost(object? sender, ProxyConnectionLostEventArgs args)
+    {
+        _ = ReconnectAfterDisconnectAsync(args);
+    }
+
+    private async Task ReconnectAfterDisconnectAsync(ProxyConnectionLostEventArgs args)
+    {
+        if (!IsLoggedIn
+            || !string.Equals(ConnectedProfileName, args.ProfileName, StringComparison.OrdinalIgnoreCase)
+            || !await _reconnectGate.WaitAsync(0))
+        {
+            return;
+        }
+
+        try
+        {
+            var profile = Profiles.FirstOrDefault(item => string.Equals(item.Name, args.ProfileName, StringComparison.OrdinalIgnoreCase));
+            if (profile is null)
+            {
+                return;
+            }
+
+            StopReconnect();
+            _reconnectCts = new CancellationTokenSource();
+            var cancellationToken = _reconnectCts.Token;
+
+            Log.Warning(args.Exception, "配置 {Profile} 的 SSH 隧道已断开，准备重试 {Count} 次", profile.Name, ReconnectAttempts);
+            IsConnecting = true;
+
+            for (var attempt = 1; attempt <= ReconnectAttempts; attempt++)
+            {
+                Log.Information("配置 {Profile} 将在 {DelaySeconds} 秒后进行第 {Attempt}/{Total} 次重连",
+                    profile.Name,
+                    ReconnectInterval.TotalSeconds,
+                    attempt,
+                    ReconnectAttempts);
+                await Task.Delay(ReconnectInterval, cancellationToken);
+
+                if (await _proxyManager.ConnectAsync(profile, cancellationToken))
+                {
+                    Log.Information("配置 {Profile} SSH 重连成功", profile.Name);
+                    return;
+                }
+
+                Log.Warning("配置 {Profile} 第 {Attempt}/{Total} 次 SSH 重连失败", profile.Name, attempt, ReconnectAttempts);
+            }
+
+            await _proxyHost.StopAsync(cancellationToken);
+            await _proxyManager.DisconnectAsync(profile.Name, cancellationToken);
+            IsLoggedIn = false;
+            ConnectedProfileName = null;
+            Log.Error("配置 {Profile} SSH 重连连续失败 {Count} 次，代理已关闭", profile.Name, ReconnectAttempts);
+        }
+        catch (OperationCanceledException)
+        {
+            // Manual logout and application exit intentionally stop reconnection.
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "配置 {Profile} SSH 自动重连异常", args.ProfileName);
+        }
+        finally
+        {
+            _reconnectCts?.Dispose();
+            _reconnectCts = null;
+            IsConnecting = false;
+            _reconnectGate.Release();
         }
     }
 

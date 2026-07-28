@@ -26,7 +26,7 @@ public sealed record ProxyProfile
     /// <summary>
     /// When set, a SOCKS5 proxy will be exposed locally on this port.
     /// </summary>
-    public int LocalSocksPort { get; init; } = 1080;
+    public int LocalSocksPort { get; init; } = 10808;
 
     /// <summary>
     /// Rules scoped to this profile only.

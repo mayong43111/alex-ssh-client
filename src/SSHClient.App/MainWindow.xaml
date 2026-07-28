@@ -203,7 +203,7 @@
                                             <TextBlock Text="方式" Grid.Column="0"/>
                                             <ComboBox Grid.Column="1"
                                                       SelectedValuePath="Tag"
-                                                      SelectedValue="{Binding ProfilesVM.SelectedProfile.AuthMethod, Mode=TwoWay}">
+                                                      SelectedValue="{Binding ProfilesVM.SelectedAuthMethod, Mode=TwoWay}">
                                                 <ComboBoxItem Content="密码" Tag="{x:Static coreModels:SshAuthMethod.Password}"/>
                                                 <ComboBoxItem Content="公钥" Tag="{x:Static coreModels:SshAuthMethod.PrivateKey}"/>
                                             </ComboBox>
@@ -214,7 +214,7 @@
                                                 <Style TargetType="Grid">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                     <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding ProfilesVM.SelectedProfile.AuthMethod}" Value="{x:Static coreModels:SshAuthMethod.Password}">
+                                                        <DataTrigger Binding="{Binding ProfilesVM.SelectedAuthMethod}" Value="{x:Static coreModels:SshAuthMethod.Password}">
                                                             <Setter Property="Visibility" Value="Visible"/>
                                                         </DataTrigger>
                                                     </Style.Triggers>
@@ -233,7 +233,7 @@
                                                 <Style TargetType="Grid">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                     <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding ProfilesVM.SelectedProfile.AuthMethod}" Value="{x:Static coreModels:SshAuthMethod.PrivateKey}">
+                                                        <DataTrigger Binding="{Binding ProfilesVM.SelectedAuthMethod}" Value="{x:Static coreModels:SshAuthMethod.PrivateKey}">
                                                             <Setter Property="Visibility" Value="Visible"/>
                                                         </DataTrigger>
                                                     </Style.Triggers>

@@ -163,6 +163,25 @@ public class ProxyManagerTests
         configService.LoadCount.Should().Be(1);
     }
 
+    [Fact]
+    public async Task ConnectionLost_Should_Relay_Tunnel_Disconnection_Event()
+    {
+        var appSettings = new AppSettings
+        {
+            Profiles = { new ProxyProfile { Name = "P1", Host = "example.com", Username = "user" } }
+        };
+        var tunnel = new FakeSshTunnelService();
+        var proxyManager = new ProxyManager(new InMemoryConfigService(appSettings), () => tunnel);
+        ProxyConnectionLostEventArgs? connectionLost = null;
+        proxyManager.ConnectionLost += (_, args) => connectionLost = args;
+
+        await proxyManager.ConnectAsync("P1");
+        tunnel.RaiseDisconnected();
+
+        connectionLost.Should().NotBeNull();
+        connectionLost!.ProfileName.Should().Be("P1");
+    }
+
     private sealed class InMemoryConfigService : IConfigService
     {
         private readonly AppSettings _settings;
@@ -178,6 +197,7 @@ public class ProxyManagerTests
 
     private sealed class FakeSshTunnelService : ISshTunnelService
     {
+        public event EventHandler<SshTunnelDisconnectedEventArgs>? Disconnected;
         public List<string> StartedProfiles { get; } = new();
         public bool IsConnected { get; private set; }
 
@@ -195,6 +215,12 @@ public class ProxyManagerTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public void RaiseDisconnected()
+        {
+            IsConnected = false;
+            Disconnected?.Invoke(this, new SshTunnelDisconnectedEventArgs(StartedProfiles.Last(), new IOException("模拟断线")));
+        }
     }
 
     private sealed class FakeProxyConnector : IProxyConnector

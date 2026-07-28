@@ -5,11 +5,24 @@ namespace SSHClient.Core.Services;
 
 public interface IProxyManager
 {
+    event EventHandler<ProxyConnectionLostEventArgs>? ConnectionLost;
     Task<bool> ConnectAsync(string profileName, CancellationToken cancellationToken = default);
     Task<bool> ConnectAsync(ProxyProfile profile, CancellationToken cancellationToken = default);
     Task DisconnectAsync(string profileName, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ProxyProfile>> GetProfilesAsync(CancellationToken cancellationToken = default);
     Task ReloadAsync(CancellationToken cancellationToken = default);
+}
+
+public sealed class ProxyConnectionLostEventArgs : EventArgs
+{
+    public ProxyConnectionLostEventArgs(string profileName, Exception exception)
+    {
+        ProfileName = profileName;
+        Exception = exception;
+    }
+
+    public string ProfileName { get; }
+    public Exception Exception { get; }
 }
 
 public sealed class ProxyManager : IProxyManager
@@ -18,6 +31,7 @@ public sealed class ProxyManager : IProxyManager
     private readonly Func<ISshTunnelService> _tunnelFactory;
     private readonly ILogger _logger;
     private readonly Dictionary<string, ISshTunnelService> _activeTunnels = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, EventHandler<SshTunnelDisconnectedEventArgs>> _disconnectHandlers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ProxyProfile> _profiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private bool _profilesLoaded;
@@ -28,6 +42,8 @@ public sealed class ProxyManager : IProxyManager
         _tunnelFactory = tunnelFactory;
         _logger = logger ?? Serilog.Log.Logger;
     }
+
+    public event EventHandler<ProxyConnectionLostEventArgs>? ConnectionLost;
 
     public async Task ReloadAsync(CancellationToken cancellationToken = default)
     {
@@ -82,6 +98,14 @@ public sealed class ProxyManager : IProxyManager
                 return true;
             }
 
+            if (existing is not null)
+            {
+                DetachDisconnectHandler(profileName, existing);
+                await existing.StopAsync(cancellationToken);
+                await existing.DisposeAsync();
+                _activeTunnels.Remove(profileName);
+            }
+
             _logger.Information(
                 "正在连接配置 {Profile} 到 SSH {Host}:{Port}，用户名 {Username}，认证方式 {AuthMethod}",
                 profile.Name,
@@ -95,6 +119,7 @@ public sealed class ProxyManager : IProxyManager
             if (success)
             {
                 _activeTunnels[profileName] = tunnel;
+                AttachDisconnectHandler(profileName, tunnel);
                 _logger.Information("配置 {Profile} 连接成功", profileName);
             }
             else
@@ -152,6 +177,7 @@ public sealed class ProxyManager : IProxyManager
             if (_activeTunnels.TryGetValue(profile.Name, out var existing))
             {
                 _logger.Information("配置 {Profile} 已连接，正在按当前界面配置重新连接", profile.Name);
+                DetachDisconnectHandler(profile.Name, existing);
                 await existing.StopAsync(cancellationToken);
                 await existing.DisposeAsync();
                 _activeTunnels.Remove(profile.Name);
@@ -170,6 +196,7 @@ public sealed class ProxyManager : IProxyManager
             if (success)
             {
                 _activeTunnels[profile.Name] = tunnel;
+                AttachDisconnectHandler(profile.Name, tunnel);
                 _logger.Information("配置 {Profile} 连接成功", profile.Name);
             }
             else
@@ -194,6 +221,7 @@ public sealed class ProxyManager : IProxyManager
             if (_activeTunnels.TryGetValue(profileName, out var tunnel))
             {
                 _logger.Information("正在断开配置 {Profile}", profileName);
+                DetachDisconnectHandler(profileName, tunnel);
                 await tunnel.StopAsync(cancellationToken);
                 await tunnel.DisposeAsync();
                 _activeTunnels.Remove(profileName);
@@ -203,6 +231,28 @@ public sealed class ProxyManager : IProxyManager
         finally
         {
             _mutex.Release();
+        }
+    }
+
+    private void AttachDisconnectHandler(string profileName, ISshTunnelService tunnel)
+    {
+        EventHandler<SshTunnelDisconnectedEventArgs> handler = (_, args) =>
+        {
+            if (string.Equals(args.ProfileName, profileName, StringComparison.OrdinalIgnoreCase))
+            {
+                ConnectionLost?.Invoke(this, new ProxyConnectionLostEventArgs(profileName, args.Exception));
+            }
+        };
+
+        _disconnectHandlers[profileName] = handler;
+        tunnel.Disconnected += handler;
+    }
+
+    private void DetachDisconnectHandler(string profileName, ISshTunnelService tunnel)
+    {
+        if (_disconnectHandlers.Remove(profileName, out var handler))
+        {
+            tunnel.Disconnected -= handler;
         }
     }
 

@@ -27,7 +27,7 @@ public sealed class AutoProxyScriptService : IAutoProxyScriptService, IAsyncDisp
         _pacHttpHost = pacHttpHost;
         _pacScriptBuilder = pacScriptBuilder;
         _logger = logger ?? Serilog.Log.Logger;
-        _currentScript = _pacScriptBuilder.Build(proxyPort: 1080, Array.Empty<ProxyRule>());
+        _currentScript = _pacScriptBuilder.Build(proxyPort: 10808, Array.Empty<ProxyRule>());
     }
 
     public async Task<string> PublishAsync(int scriptPort, int proxyPort, IEnumerable<ProxyRule> rules, CancellationToken cancellationToken = default)

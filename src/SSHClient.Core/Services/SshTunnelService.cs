@@ -20,6 +20,8 @@ public sealed class SshTunnelService : ISshTunnelService, ILocalForwardManager
     private Renci.SshNet.SshClient? _client;
     private readonly ConcurrentDictionary<string, Renci.SshNet.ForwardedPortLocal> _localForwards = new();
     private Renci.SshNet.ForwardedPortDynamic? _dynamicPort;
+    private bool _isStopping;
+    private bool _disconnectNotified;
     public bool IsConnected => _client?.IsConnected == true;
 #else
     private bool _isConnected;
@@ -30,6 +32,8 @@ public sealed class SshTunnelService : ISshTunnelService, ILocalForwardManager
     {
         _logger = logger ?? Serilog.Log.Logger;
     }
+
+    public event EventHandler<SshTunnelDisconnectedEventArgs>? Disconnected;
 
     public async Task<bool> StartAsync(ProxyProfile profile, CancellationToken cancellationToken = default)
     {
@@ -85,6 +89,7 @@ public sealed class SshTunnelService : ISshTunnelService, ILocalForwardManager
                 {
                     KeepAliveInterval = TimeSpan.FromSeconds(30),
                 };
+                client.ErrorOccurred += (_, e) => NotifyDisconnected(candidate.Name, client, e.Exception);
 
                 await Task.Run(() => client.Connect(), cancellationToken);
                 if (!client.IsConnected)
@@ -98,6 +103,8 @@ public sealed class SshTunnelService : ISshTunnelService, ILocalForwardManager
                 {
                     _client = client;
                     _dynamicPort = null;
+                    _isStopping = false;
+                    _disconnectNotified = false;
                 }
 
                 _logger.Information("配置 {Profile} 的 SSH 隧道已建立（本地代理端口由应用监听）", candidate.Name);
@@ -205,6 +212,7 @@ public sealed class SshTunnelService : ISshTunnelService, ILocalForwardManager
 #if SSHNET
         lock (_sync)
         {
+            _isStopping = true;
             try
             {
                 _dynamicPort?.Stop();
@@ -235,6 +243,7 @@ public sealed class SshTunnelService : ISshTunnelService, ILocalForwardManager
             _client?.Disconnect();
             _client?.Dispose();
             _client = null;
+            _disconnectNotified = false;
         }
 #else
         _isConnected = false;
@@ -243,6 +252,22 @@ public sealed class SshTunnelService : ISshTunnelService, ILocalForwardManager
     }
 
 #if SSHNET
+    private void NotifyDisconnected(string profileName, Renci.SshNet.SshClient client, Exception exception)
+    {
+        lock (_sync)
+        {
+            if (_isStopping || _disconnectNotified || !ReferenceEquals(_client, client))
+            {
+                return;
+            }
+
+            _disconnectNotified = true;
+        }
+
+        _logger.Warning(exception, "配置 {Profile} 的 SSH 隧道发生通信错误，已断开", profileName);
+        Disconnected?.Invoke(this, new SshTunnelDisconnectedEventArgs(profileName, exception));
+    }
+
     private static Renci.SshNet.ConnectionInfo BuildConnectionInfo(ProxyProfile profile)
     {
         var methods = new List<Renci.SshNet.AuthenticationMethod>();

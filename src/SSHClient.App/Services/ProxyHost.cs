@@ -67,7 +67,9 @@ public sealed class ProxyHost : IAsyncDisposable
             var runtimeRuleEngine = new RuleEngine(BuildRuntimeRules(activeProfile?.Rules ?? Array.Empty<ProxyRule>()));
             var routeProfileName = activeProfile?.Name;
 
-            var listenPort = proxySettings.ListenPort;
+            var listenPort = activeProfile?.LocalSocksPort is > 0 and <= 65535
+                ? activeProfile.LocalSocksPort
+                : proxySettings.ListenPort;
 
             var mixed = new MixedProxyServer(
                 runtimeRuleEngine,

@@ -124,6 +124,11 @@ public class SocksProxyServerBoundaryTests
 
     private sealed class FakeSshTunnelService : ISshTunnelService
     {
+        event EventHandler<SshTunnelDisconnectedEventArgs>? ISshTunnelService.Disconnected
+        {
+            add { }
+            remove { }
+        }
         public bool IsConnected { get; private set; }
 
         public Task<bool> StartAsync(ProxyProfile profile, CancellationToken cancellationToken = default)

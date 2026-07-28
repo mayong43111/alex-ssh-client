@@ -2,12 +2,14 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using SSHClient.App.Logging;
 using System.Reflection;
+using System.Windows.Threading;
 
 namespace SSHClient.App.ViewModels;
 
-public partial class MainViewModel : ObservableObject
+public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly IUiLogService _uiLogService;
+    private readonly DispatcherTimer _logClearTimer;
 
     public ProfilesViewModel ProfilesVM { get; }
     public MonitorViewModel MonitorVM { get; }
@@ -27,10 +29,23 @@ public partial class MainViewModel : ObservableObject
 
         LiveLog = _uiLogService.GetSnapshot();
         _uiLogService.SnapshotChanged += OnSnapshotChanged;
+
+        _logClearTimer = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
+        _logClearTimer.Tick += OnLogClearTimerTick;
+        _logClearTimer.Start();
     }
 
     [RelayCommand]
     private void ClearLog() => _uiLogService.Clear();
+
+    public void Dispose()
+    {
+        _logClearTimer.Stop();
+        _logClearTimer.Tick -= OnLogClearTimerTick;
+        _uiLogService.SnapshotChanged -= OnSnapshotChanged;
+    }
+
+    private void OnLogClearTimerTick(object? sender, EventArgs e) => _uiLogService.Clear();
 
     private void OnSnapshotChanged(object? sender, string snapshot)
     {
