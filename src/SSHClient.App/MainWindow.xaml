@@ -180,7 +180,7 @@
                                         <TextBlock Text="监听地址" Grid.Row="2" Grid.Column="0"/>
                                         <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding ProfilesVM.SelectedProfile.LocalListenAddress, Mode=TwoWay}"/>
                                         <TextBlock Text="监听端口" Grid.Row="3" Grid.Column="0"/>
-                                        <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding ProfilesVM.SelectedProfile.LocalSocksPort, Mode=TwoWay}"/>
+                                        <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding ProfilesVM.SelectedListenPort, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
                                     </Grid>
                                 </GroupBox>
 

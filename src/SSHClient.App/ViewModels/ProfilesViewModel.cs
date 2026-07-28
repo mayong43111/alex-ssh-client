@@ -49,6 +49,7 @@ public partial class ProfilesViewModel : ObservableObject
     partial void OnSelectedProfileChanged(ProxyProfile? value)
     {
         SelectedAuthMethod = value?.AuthMethod ?? SshAuthMethod.PrivateKey;
+        SelectedListenPort = value?.LocalSocksPort ?? 10808;
         LoadRulesForSelectedProfile(value);
     }
 
@@ -63,6 +64,26 @@ public partial class ProfilesViewModel : ObservableObject
         }
 
         var updated = SelectedProfile with { AuthMethod = value };
+        var selectedIndex = Profiles.IndexOf(SelectedProfile);
+        if (selectedIndex >= 0)
+        {
+            Profiles[selectedIndex] = updated;
+        }
+
+        SelectedProfile = updated;
+    }
+
+    [ObservableProperty]
+    private int _selectedListenPort = 10808;
+
+    partial void OnSelectedListenPortChanged(int value)
+    {
+        if (SelectedProfile is null || SelectedProfile.LocalSocksPort == value)
+        {
+            return;
+        }
+
+        var updated = SelectedProfile with { LocalSocksPort = value };
         var selectedIndex = Profiles.IndexOf(SelectedProfile);
         if (selectedIndex >= 0)
         {
